@@ -261,13 +261,13 @@ export default function Dashboard() {
                   onClick={() => router.push('/search')}
                   className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md"
                 >
-                  Search Users
+                  🔍 Search Users
                 </button>
                 <button className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md">
-                  Create Group
+                  👥 Create Group
                 </button>
                 <button className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md">
-                  Messages
+                  💬 Messages
                 </button>
               </div>
             </div>

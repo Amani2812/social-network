@@ -34,12 +34,13 @@ export default function Login() {
         credentials: 'include',
       })
 
-      const data = await response.json()
-
-      if (data.success) {
+      if (response.ok) {
+        const data = await response.json()
+        // Login successful, redirect to dashboard
         router.push('/dashboard')
       } else {
-        setError(data.message || 'Login failed')
+        const data = await response.json()
+        setError(data.error || 'Login failed')
       }
     } catch (err) {
       setError('Network error. Please try again.')

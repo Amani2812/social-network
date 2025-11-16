@@ -229,7 +229,10 @@ export default function Profile() {
               </div>
               <div className="mt-6 sm:mt-0">
                 {isOwnProfile ? (
-                  <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md">
+                  <button 
+                    onClick={() => router.push('/profile/edit')}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md"
+                  >
                     Edit Profile
                   </button>
                 ) : currentUser && (
