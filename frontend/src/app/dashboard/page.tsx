@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Comments from '@/components/Comments'
 
 interface User {
   id: number
@@ -29,11 +30,84 @@ export default function Dashboard() {
   const [newPost, setNewPost] = useState('')
   const [privacy, setPrivacy] = useState('public')
   const [loading, setLoading] = useState(true)
+  const [selectedImage, setSelectedImage] = useState<File | null>(null)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [ws, setWs] = useState<WebSocket | null>(null)
 
   useEffect(() => {
     fetchUser()
     fetchFeed()
+    fetchUnreadCount()
+    
+    // Poll for new notifications every 30 seconds
+    const interval = setInterval(fetchUnreadCount, 30000)
+    return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    if (user) {
+      connectWebSocket()
+    }
+    
+    return () => {
+      if (ws) {
+        ws.close()
+      }
+    }
+  }, [user])
+
+  const connectWebSocket = () => {
+    if (!user) return
+    
+    const websocket = new WebSocket('ws://localhost:8080/ws')
+    
+    websocket.onopen = () => {
+      console.log('✅ Dashboard WebSocket connected')
+    }
+    
+    websocket.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+      console.log('📥 Received:', data)
+      
+      // Handle new post notifications
+      if (data.type === 'new_post') {
+        // Refresh feed to show new post
+        fetchFeed()
+      }
+    }
+    
+    websocket.onerror = (error) => {
+      console.error('WebSocket error:', error)
+    }
+    
+    websocket.onclose = () => {
+      console.log('WebSocket disconnected')
+      // Reconnect after 3 seconds
+      setTimeout(() => {
+        if (user) {
+          connectWebSocket()
+        }
+      }, 3000)
+    }
+    
+    setWs(websocket)
+  }
+
+  const fetchUnreadCount = async () => {
+    try {
+      const response = await fetch('http://localhost:8080/api/notifications/unread', {
+        credentials: 'include',
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setUnreadCount(data.count || 0)
+      }
+    } catch (err) {
+      console.error('Failed to fetch unread count:', err)
+    }
+  }
 
   const fetchUser = async () => {
     try {
@@ -58,20 +132,81 @@ export default function Dashboard() {
       })
       if (response.ok) {
         const postsData = await response.json()
-        setPosts(postsData)
+        setPosts(postsData || [])
+      } else {
+        setPosts([])
       }
     } catch (err) {
       console.error('Failed to fetch feed:', err)
+      setPosts([])
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      // Validate file type
+      const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif']
+      if (!validTypes.includes(file.type)) {
+        alert('Please select a valid image file (JPEG, PNG, or GIF)')
+        return
+      }
+
+      // Validate file size (max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        alert('File size must be less than 10MB')
+        return
+      }
+
+      setSelectedImage(file)
+      
+      // Create preview
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setImagePreview(reader.result as string)
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const handleRemoveImage = () => {
+    setSelectedImage(null)
+    setImagePreview(null)
   }
 
   const handleCreatePost = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newPost.trim()) return
 
+    setUploading(true)
+
     try {
+      let imagePath: string | null = null
+
+      // Upload image first if selected
+      if (selectedImage) {
+        const formData = new FormData()
+        formData.append('image', selectedImage)
+
+        const uploadResponse = await fetch('http://localhost:8080/api/upload', {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        })
+
+        if (uploadResponse.ok) {
+          const uploadData = await uploadResponse.json()
+          imagePath = uploadData.path
+        } else {
+          alert('Failed to upload image')
+          setUploading(false)
+          return
+        }
+      }
+
+      // Create post with or without image
       const response = await fetch('http://localhost:8080/api/posts', {
         method: 'POST',
         headers: {
@@ -80,16 +215,25 @@ export default function Dashboard() {
         body: JSON.stringify({
           content: newPost,
           privacy: privacy,
+          image_path: imagePath,
         }),
         credentials: 'include',
       })
 
       if (response.ok) {
+        const newPostData = await response.json()
+        
+        // Add post to feed immediately
+        setPosts(prev => [newPostData, ...prev])
+        
         setNewPost('')
-        fetchFeed() // Refresh feed
+        setSelectedImage(null)
+        setImagePreview(null)
       }
     } catch (err) {
       console.error('Failed to create post:', err)
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -124,6 +268,20 @@ export default function Dashboard() {
               <span className="text-gray-700">
                 Welcome, {user?.first_name} {user?.last_name}
               </span>
+              
+              {/* Notification Bell */}
+              <button
+                onClick={() => router.push('/notifications')}
+                className="relative text-gray-600 hover:text-gray-900"
+              >
+                <span className="text-2xl">🔔</span>
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-600 text-white text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </button>
+              
               <button
                 onClick={() => router.push(`/profile/${user?.id}`)}
                 className="text-blue-600 hover:text-blue-800"
@@ -155,21 +313,60 @@ export default function Dashboard() {
                   className="w-full p-3 border border-gray-300 rounded-md resize-none focus:ring-blue-500 focus:border-blue-500"
                   rows={4}
                 />
+                
+                {/* Image Preview */}
+                {imagePreview && (
+                  <div className="mt-4 relative">
+                    <img 
+                      src={imagePreview} 
+                      alt="Preview" 
+                      className="w-full max-h-64 object-cover rounded-md"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleRemoveImage}
+                      className="absolute top-2 right-2 bg-red-600 text-white rounded-full p-2 hover:bg-red-700"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
                 <div className="mt-4 flex items-center justify-between">
-                  <select
-                    value={privacy}
-                    onChange={(e) => setPrivacy(e.target.value)}
-                    className="border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
-                  >
-                    <option value="public">Public</option>
-                    <option value="almost_private">Followers Only</option>
-                    <option value="private">Private</option>
-                  </select>
+                  <div className="flex items-center space-x-2">
+                    <select
+                      value={privacy}
+                      onChange={(e) => setPrivacy(e.target.value)}
+                      className="border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                      <option value="public">Public</option>
+                      <option value="almost_private">Followers Only</option>
+                      <option value="private">Private</option>
+                    </select>
+                    
+                    {/* Image Upload Button */}
+                    <label className="cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-md flex items-center">
+                      <span className="mr-2">📷</span>
+                      <span>Image</span>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/jpg,image/png,image/gif"
+                        onChange={handleImageSelect}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                  
                   <button
                     type="submit"
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-md"
+                    disabled={uploading}
+                    className={`px-6 py-2 rounded-md ${
+                      uploading 
+                        ? 'bg-gray-400 cursor-not-allowed' 
+                        : 'bg-blue-600 hover:bg-blue-700'
+                    } text-white`}
                   >
-                    Post
+                    {uploading ? 'Posting...' : 'Post'}
                   </button>
                 </div>
               </form>
@@ -205,9 +402,9 @@ export default function Dashboard() {
                     </div>
                     <p className="text-gray-700 mb-4">{post.content}</p>
                     {post.image_path && (
-                      <img src={post.image_path} alt="Post image" className="w-full rounded-md mb-4" />
+                      <img src={`http://localhost:8080${post.image_path}`} alt="Post image" className="w-full rounded-md mb-4" />
                     )}
-                    <div className="flex items-center justify-between text-sm text-gray-500">
+                    <div className="flex items-center text-sm text-gray-500 mb-2">
                       <span className={`px-2 py-1 rounded-full text-xs ${
                         post.privacy === 'public' ? 'bg-green-100 text-green-800' :
                         post.privacy === 'almost_private' ? 'bg-yellow-100 text-yellow-800' :
@@ -216,10 +413,10 @@ export default function Dashboard() {
                         {post.privacy === 'public' ? 'Public' :
                          post.privacy === 'almost_private' ? 'Followers Only' : 'Private'}
                       </span>
-                      <button className="text-blue-600 hover:text-blue-800">
-                        Comment
-                      </button>
                     </div>
+                    
+                    {/* Comments Component */}
+                    <Comments postId={post.id} currentUserId={user?.id} />
                   </div>
                 ))
               )}
@@ -263,10 +460,27 @@ export default function Dashboard() {
                 >
                   🔍 Search Users
                 </button>
-                <button className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md">
-                  👥 Create Group
+                <button
+                  onClick={() => router.push('/notifications')}
+                  className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md flex items-center justify-between"
+                >
+                  <span>🔔 Notifications</span>
+                  {unreadCount > 0 && (
+                    <span className="bg-red-600 text-white text-xs font-bold px-2 py-1 rounded-full">
+                      {unreadCount}
+                    </span>
+                  )}
                 </button>
-                <button className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md">
+                <button
+                  onClick={() => router.push('/groups')}
+                  className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md"
+                >
+                  👥 Groups
+                </button>
+                <button
+                  onClick={() => router.push('/messages')}
+                  className="w-full text-left px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md"
+                >
                   💬 Messages
                 </button>
               </div>

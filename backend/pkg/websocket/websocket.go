@@ -37,6 +37,30 @@ type Hub struct {
 	repo       *models.Repository
 }
 
+// BroadcastNewPost sends a notification to all connected clients about a new post
+func (h *Hub) BroadcastNewPost(postID int, userID int) {
+	message := &Message{
+		Type:      "new_post",
+		SenderID:  userID,
+		Content:   "",
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+
+	data, _ := json.Marshal(message)
+	
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	
+	// Send to all connected clients
+	for _, client := range h.clients {
+		select {
+		case client.send <- data:
+		default:
+			// Client's send channel is full, skip
+		}
+	}
+}
+
 type Message struct {
 	Type       string `json:"type"` // "private", "group"
 	SenderID   int    `json:"sender_id"`

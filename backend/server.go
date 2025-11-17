@@ -39,13 +39,15 @@ func main() {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
-	// Initialize repository and handlers
+	// Initialize repository
 	repo := models.NewRepository(database.DB)
-	handler := handlers.NewHandler(repo)
 
 	// Initialize WebSocket hub
 	hub := websocket.NewHub(repo)
 	go hub.Run()
+
+	// Initialize handlers with hub
+	handler := handlers.NewHandler(repo, hub)
 
 	// Serve static files (uploads)
 	fs := http.FileServer(http.Dir("./uploads"))
@@ -66,6 +68,7 @@ func main() {
 	http.HandleFunc("/api/follow/request", enableCORS(handler.SendFollowRequest))
 	http.HandleFunc("/api/follow/respond", enableCORS(handler.RespondToFollowRequest))
 	http.HandleFunc("/api/follow/unfollow", enableCORS(handler.Unfollow))
+	http.HandleFunc("/api/follow/status", enableCORS(handler.GetFollowStatus))
 	http.HandleFunc("/api/follow/followers", enableCORS(handler.GetFollowers))
 	http.HandleFunc("/api/follow/following", enableCORS(handler.GetFollowing))
 	http.HandleFunc("/api/follow/pending", enableCORS(handler.GetPendingRequests))

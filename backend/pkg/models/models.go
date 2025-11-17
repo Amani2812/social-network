@@ -369,6 +369,18 @@ func (r *Repository) IsFollowing(followerID, followingID int) (bool, error) {
 	return count > 0, err
 }
 
+func (r *Repository) GetFollowRelationship(followerID, followingID int) (*Follow, error) {
+	follow := &Follow{}
+	err := r.db.QueryRow(
+		"SELECT id, follower_id, following_id, status, created_at FROM follows WHERE follower_id = ? AND following_id = ?",
+		followerID, followingID,
+	).Scan(&follow.ID, &follow.FollowerID, &follow.FollowingID, &follow.Status, &follow.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return follow, nil
+}
+
 // Post methods
 func (r *Repository) CreatePost(userID int, content, privacy string, imagePath *string) (*Post, error) {
 	result, err := r.db.Exec(

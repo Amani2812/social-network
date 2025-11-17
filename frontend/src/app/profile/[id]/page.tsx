@@ -41,12 +41,14 @@ export default function Profile() {
   const [user, setUser] = useState<User | null>(null)
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [posts, setPosts] = useState<Post[]>([])
-  const [followers, setFollowers] = useState<Follow[]>([])
-  const [following, setFollowing] = useState<Follow[]>([])
+  const [followers, setFollowers] = useState<User[]>([])
+  const [following, setFollowing] = useState<User[]>([])
   const [isFollowing, setIsFollowing] = useState(false)
   const [hasPendingRequest, setHasPendingRequest] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [showFollowersModal, setShowFollowersModal] = useState(false)
+  const [showFollowingModal, setShowFollowingModal] = useState(false)
 
   useEffect(() => {
     fetchProfile()
@@ -75,10 +77,13 @@ export default function Profile() {
       })
       if (response.ok) {
         const postsData = await response.json()
-        setPosts(postsData)
+        setPosts(postsData || [])
+      } else {
+        setPosts([])
       }
     } catch (err) {
       console.error('Failed to fetch posts:', err)
+      setPosts([])
     }
   }
 
@@ -108,12 +113,16 @@ export default function Profile() {
 
       if (followersRes.ok) {
         const followersData = await followersRes.json()
-        setFollowers(followersData)
+        setFollowers(followersData || [])
+      } else {
+        setFollowers([])
       }
 
       if (followingRes.ok) {
         const followingData = await followingRes.json()
-        setFollowing(followingData)
+        setFollowing(followingData || [])
+      } else {
+        setFollowing([])
       }
 
       if (followStatusRes.ok) {
@@ -216,12 +225,18 @@ export default function Profile() {
                 </h1>
                 <p className="text-gray-600">{user.email}</p>
                 <div className="mt-4 flex items-center space-x-4">
-                  <span className="text-sm text-gray-500">
-                    {followers.length} followers
-                  </span>
-                  <span className="text-sm text-gray-500">
-                    {following.length} following
-                  </span>
+                  <button
+                    onClick={() => setShowFollowersModal(true)}
+                    className="text-sm text-gray-500 hover:text-blue-600 hover:underline"
+                  >
+                    <span className="font-semibold text-gray-900">{followers.length}</span> followers
+                  </button>
+                  <button
+                    onClick={() => setShowFollowingModal(true)}
+                    className="text-sm text-gray-500 hover:text-blue-600 hover:underline"
+                  >
+                    <span className="font-semibold text-gray-900">{following.length}</span> following
+                  </button>
                   <span className={`text-sm px-2 py-1 rounded-full ${user.is_public ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                     {user.is_public ? 'Public' : 'Private'}
                   </span>
@@ -236,14 +251,22 @@ export default function Profile() {
                     Edit Profile
                   </button>
                 ) : currentUser && (
-                  <div>
+                  <div className="flex gap-2">
                     {isFollowing ? (
-                      <button
-                        onClick={handleUnfollow}
-                        className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-md"
-                      >
-                        Unfollow
-                      </button>
+                      <>
+                        <button
+                          onClick={handleUnfollow}
+                          className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded-md"
+                        >
+                          Unfollow
+                        </button>
+                        <button
+                          onClick={() => router.push(`/messages?user=${user.id}`)}
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md"
+                        >
+                          💬 Message
+                        </button>
+                      </>
                     ) : hasPendingRequest ? (
                       <button className="bg-yellow-600 text-white px-4 py-2 rounded-md cursor-not-allowed" disabled>
                         Request Pending
@@ -312,6 +335,102 @@ export default function Profile() {
           )}
         </div>
       </div>
+
+      {/* Followers Modal */}
+      {showFollowersModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setShowFollowersModal(false)}>
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 max-h-96 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-gray-900">Followers</h2>
+              <button onClick={() => setShowFollowersModal(false)} className="text-gray-500 hover:text-gray-700">
+                ✕
+              </button>
+            </div>
+            {followers.length === 0 ? (
+              <p className="text-center text-gray-500 py-4">No followers yet</p>
+            ) : (
+              <div className="space-y-3">
+                {followers.map((follower) => (
+                  <button
+                    key={follower.id}
+                    onClick={() => {
+                      setShowFollowersModal(false)
+                      router.push(`/profile/${follower.id}`)
+                    }}
+                    className="w-full flex items-center p-3 hover:bg-gray-50 rounded-lg"
+                  >
+                    <div className="w-12 h-12 bg-gray-300 rounded-full flex items-center justify-center mr-3">
+                      {follower.avatar_path ? (
+                        <img src={follower.avatar_path} alt="Avatar" className="w-full h-full rounded-full object-cover" />
+                      ) : (
+                        <span className="text-lg text-gray-600">
+                          {follower.first_name[0]}{follower.last_name[0]}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="font-semibold text-gray-900">
+                        {follower.first_name} {follower.last_name}
+                      </p>
+                      {follower.nickname && (
+                        <p className="text-sm text-gray-500">@{follower.nickname}</p>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Following Modal */}
+      {showFollowingModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setShowFollowingModal(false)}>
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 max-h-96 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold text-gray-900">Following</h2>
+              <button onClick={() => setShowFollowingModal(false)} className="text-gray-500 hover:text-gray-700">
+                ✕
+              </button>
+            </div>
+            {following.length === 0 ? (
+              <p className="text-center text-gray-500 py-4">Not following anyone yet</p>
+            ) : (
+              <div className="space-y-3">
+                {following.map((followedUser) => (
+                  <button
+                    key={followedUser.id}
+                    onClick={() => {
+                      setShowFollowingModal(false)
+                      router.push(`/profile/${followedUser.id}`)
+                    }}
+                    className="w-full flex items-center p-3 hover:bg-gray-50 rounded-lg"
+                  >
+                    <div className="w-12 h-12 bg-gray-300 rounded-full flex items-center justify-center mr-3">
+                      {followedUser.avatar_path ? (
+                        <img src={followedUser.avatar_path} alt="Avatar" className="w-full h-full rounded-full object-cover" />
+                      ) : (
+                        <span className="text-lg text-gray-600">
+                          {followedUser.first_name[0]}{followedUser.last_name[0]}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="font-semibold text-gray-900">
+                        {followedUser.first_name} {followedUser.last_name}
+                      </p>
+                      {followedUser.nickname && (
+                        <p className="text-sm text-gray-500">@{followedUser.nickname}</p>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

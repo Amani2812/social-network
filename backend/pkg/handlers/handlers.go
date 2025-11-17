@@ -18,10 +18,16 @@ import (
 
 type Handler struct {
 	repo *models.Repository
+	hub  interface {
+		BroadcastNewPost(postID int, userID int)
+	}
 }
 
-func NewHandler(repo *models.Repository) *Handler {
-	return &Handler{repo: repo}
+func NewHandler(repo *models.Repository, hub interface{ BroadcastNewPost(postID int, userID int) }) *Handler {
+	return &Handler{
+		repo: repo,
+		hub:  hub,
+	}
 }
 
 // Helper functions
@@ -157,7 +163,22 @@ func (h *Handler) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusOK, user)
+	// Convert is_private to is_public for frontend
+	response := map[string]interface{}{
+		"id":            user.ID,
+		"email":         user.Email,
+		"first_name":    user.FirstName,
+		"last_name":     user.LastName,
+		"date_of_birth": user.DateOfBirth,
+		"avatar_path":   user.AvatarPath,
+		"nickname":      user.Nickname,
+		"about_me":      user.AboutMe,
+		"is_public":     !user.IsPrivate,
+		"is_private":    user.IsPrivate,
+		"created_at":    user.CreatedAt,
+	}
+
+	respondJSON(w, http.StatusOK, response)
 }
 
 // User handlers
@@ -180,7 +201,22 @@ func (h *Handler) GetUserByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusOK, user)
+	// Convert is_private to is_public for frontend
+	response := map[string]interface{}{
+		"id":            user.ID,
+		"email":         user.Email,
+		"first_name":    user.FirstName,
+		"last_name":     user.LastName,
+		"date_of_birth": user.DateOfBirth,
+		"avatar_path":   user.AvatarPath,
+		"nickname":      user.Nickname,
+		"about_me":      user.AboutMe,
+		"is_public":     !user.IsPrivate,
+		"is_private":    user.IsPrivate,
+		"created_at":    user.CreatedAt,
+	}
+
+	respondJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {
@@ -217,10 +253,12 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
+		FirstName  *string `json:"first_name"`
+		LastName   *string `json:"last_name"`
 		AvatarPath *string `json:"avatar_path"`
 		Nickname   *string `json:"nickname"`
 		AboutMe    *string `json:"about_me"`
-		IsPrivate  bool    `json:"is_private"`
+		IsPublic   *bool   `json:"is_public"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -228,7 +266,16 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.repo.UpdateUserProfile(user.ID, req.AvatarPath, req.Nickname, req.AboutMe, req.IsPrivate); err != nil {
+	// Convert is_public to is_private for database
+	var isPrivate bool
+	if req.IsPublic != nil {
+		isPrivate = !(*req.IsPublic)
+	} else {
+		// Keep current value if not provided
+		isPrivate = user.IsPrivate
+	}
+
+	if err := h.repo.UpdateUserProfile(user.ID, req.AvatarPath, req.Nickname, req.AboutMe, isPrivate); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to update profile")
 		return
 	}
@@ -263,10 +310,15 @@ func (h *Handler) SendFollowRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create notification
+	// Create notification for all follow requests (both public and private profiles)
 	targetUser, _ := h.repo.GetUserByID(req.FollowingID)
-	if targetUser != nil && targetUser.IsPrivate {
-		content := fmt.Sprintf("%s %s wants to follow you", user.FirstName, user.LastName)
+	if targetUser != nil {
+		var content string
+		if targetUser.IsPrivate {
+			content = fmt.Sprintf("%s %s wants to follow you", user.FirstName, user.LastName)
+		} else {
+			content = fmt.Sprintf("%s %s started following you", user.FirstName, user.LastName)
+		}
 		h.repo.CreateNotification(req.FollowingID, "follow_request", content, &user.ID)
 	}
 
@@ -320,16 +372,31 @@ func (h *Handler) Unfollow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		FollowingID int `json:"following_id"`
+	// Try to get following_id from query parameter first (for compatibility)
+	followingIDStr := r.URL.Query().Get("following_id")
+	var followingID int
+	
+	if followingIDStr != "" {
+		// From query parameter
+		var err error
+		followingID, err = strconv.Atoi(followingIDStr)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "Invalid following ID")
+			return
+		}
+	} else {
+		// From request body
+		var req struct {
+			FollowingID int `json:"following_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+		followingID = req.FollowingID
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	if err := h.repo.DeleteFollow(user.ID, req.FollowingID); err != nil {
+	if err := h.repo.DeleteFollow(user.ID, followingID); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to unfollow")
 		return
 	}
@@ -402,6 +469,46 @@ func (h *Handler) GetPendingRequests(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, requests)
 }
 
+func (h *Handler) GetFollowStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	followerIDStr := r.URL.Query().Get("follower_id")
+	followingIDStr := r.URL.Query().Get("following_id")
+
+	followerID, err := strconv.Atoi(followerIDStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid follower ID")
+		return
+	}
+
+	followingID, err := strconv.Atoi(followingIDStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid following ID")
+		return
+	}
+
+	// Check if following
+	isFollowing := false
+	hasPendingRequest := false
+
+	follow, err := h.repo.GetFollowRelationship(followerID, followingID)
+	if err == nil && follow != nil {
+		if follow.Status == "accepted" {
+			isFollowing = true
+		} else if follow.Status == "pending" {
+			hasPendingRequest = true
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]bool{
+		"is_following":         isFollowing,
+		"has_pending_request": hasPendingRequest,
+	})
+}
+
 // Post handlers
 func (h *Handler) CreatePost(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -431,6 +538,9 @@ func (h *Handler) CreatePost(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "Failed to create post")
 		return
 	}
+
+	// Broadcast new post to all connected clients
+	h.hub.BroadcastNewPost(post.ID, user.ID)
 
 	respondJSON(w, http.StatusCreated, post)
 }

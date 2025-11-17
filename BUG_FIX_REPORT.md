@@ -1,215 +1,215 @@
-# Bug Fix Report - Authentication Issues
+# Bug Fix Report - Social Network Application
 
-## Date: 2024-01-15
-## Issue: Registration and Login Failed
-
----
-
-## Problem Description
-
-**Reported Issue**: User reported that registration and login kept showing "failed" messages.
-
-**Root Cause**: Frontend was checking for a `data.success` field in the API response, but the backend was returning the user object directly with HTTP status codes (201 for registration, 200 for login) instead of a JSON object with a `success` field.
+## Date: 2025-01-17
 
 ---
 
-## Technical Details
+## Bug #1: Follow Requests Not Showing Notifications
 
-### Backend API Response Format
+### Status: ⚠️ NEEDS BACKEND VERIFICATION
 
-**Registration Endpoint** (`POST /api/auth/register`):
-- Success: Returns HTTP 201 with user object
-```json
-{
-  "id": 8,
-  "email": "test@test.com",
-  "first_name": "Test",
-  "last_name": "User",
-  "date_of_birth": "1990-01-01T00:00:00Z",
-  "is_private": false,
-  "created_at": "2025-11-14T21:58:53Z"
+### Description:
+When User A follows User B, User B does not receive a notification about the follow request.
+
+### Expected Behavior:
+- User A sends follow request to User B
+- User B should see a notification in the notifications page
+- Notification should show "User A wants to follow you"
+
+### Current Behavior:
+- Follow request is sent successfully
+- No notification appears for User B
+
+### Possible Causes:
+1. Backend notification creation not triggered on follow request
+2. Notification API endpoint not returning data correctly
+3. Frontend notification polling not working
+
+### Investigation Needed:
+Check backend `handlers.go` - `SendFollowRequest` function to verify:
+```go
+// Should create notification like this:
+notification := &models.Notification{
+    UserID: followingID,  // The person being followed
+    Type: "follow_request",
+    Content: fmt.Sprintf("%s %s wants to follow you", follower.FirstName, follower.LastName),
+    RelatedID: followerID,
 }
+repo.CreateNotification(notification)
 ```
 
-**Login Endpoint** (`POST /api/auth/login`):
-- Success: Returns HTTP 200 with user object
-- Error: Returns HTTP 4xx/5xx with error object
+### Frontend Code (Already Correct):
+- `frontend/src/app/notifications/page.tsx` - Fetches notifications correctly
+- `frontend/src/app/dashboard/page.tsx` - Shows notification bell with count
+- Polling every 30 seconds for new notifications
 
-### Frontend Issue
+---
 
-**Before Fix** (Incorrect):
+## Bug #2: Profile Privacy Toggle Not Persisting
+
+### Status: ⚠️ NEEDS BACKEND VERIFICATION
+
+### Description:
+When user toggles profile from Private to Public (or vice versa), the change doesn't persist after page refresh.
+
+### Expected Behavior:
+- User checks/unchecks "Public Profile" checkbox
+- Clicks "Save Changes"
+- Profile privacy should update in database
+- After refresh, new privacy setting should be shown
+
+### Current Behavior:
+- User toggles privacy setting
+- Clicks save
+- Success message appears
+- After refresh, privacy reverts to previous state
+
+### Frontend Code (Already Correct):
 ```typescript
-const data = await response.json()
+// frontend/src/app/profile/edit/page.tsx
+const response = await fetch('http://localhost:8080/api/users/profile', {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    first_name: formData.first_name,
+    last_name: formData.last_name,
+    nickname: formData.nickname,
+    about_me: formData.about_me,
+    is_public: formData.is_public  // ✅ Sending boolean correctly
+  }),
+  credentials: 'include',
+})
+```
 
-if (data.success) {  // ❌ Backend doesn't return 'success' field
-  router.push('/dashboard')
-} else {
-  setError(data.message || 'Registration failed')
+### Investigation Needed:
+Check backend `handlers.go` - `UpdateProfile` function to verify:
+
+1. **Does it accept `is_public` field?**
+```go
+type UpdateProfileRequest struct {
+    FirstName string `json:"first_name"`
+    LastName  string `json:"last_name"`
+    Nickname  string `json:"nickname"`
+    AboutMe   string `json:"about_me"`
+    IsPublic  bool   `json:"is_public"`  // ⚠️ Check if this exists
 }
 ```
 
-**After Fix** (Correct):
-```typescript
-if (response.ok) {  // ✅ Check HTTP status code
-  const data = await response.json()
-  router.push('/dashboard')
-} else {
-  const data = await response.json()
-  setError(data.error || 'Registration failed')
+2. **Does it update the database?**
+```go
+// Should update like this:
+_, err := h.repo.DB.Exec(`
+    UPDATE users 
+    SET first_name = ?, last_name = ?, nickname = ?, about_me = ?, is_public = ?
+    WHERE id = ?
+`, req.FirstName, req.LastName, req.Nickname, req.AboutMe, req.IsPublic, user.ID)
+```
+
+### Possible Fixes Needed in Backend:
+
+**Option 1: Add is_public to UpdateProfile handler**
+```go
+func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+    // ... existing code ...
+    
+    var req struct {
+        FirstName string `json:"first_name"`
+        LastName  string `json:"last_name"`
+        Nickname  string `json:"nickname"`
+        AboutMe   string `json:"about_me"`
+        IsPublic  bool   `json:"is_public"`  // ADD THIS
+    }
+    
+    // ... decode request ...
+    
+    // Update query should include is_public
+    _, err := h.repo.DB.Exec(`
+        UPDATE users 
+        SET first_name = ?, last_name = ?, nickname = ?, about_me = ?, is_public = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    `, req.FirstName, req.LastName, req.Nickname, req.AboutMe, req.IsPublic, user.ID)
+}
+```
+
+**Option 2: Create separate endpoint for privacy toggle**
+```go
+func (h *Handler) TogglePrivacy(w http.ResponseWriter, r *http.Request) {
+    user, err := h.getUserFromSession(r)
+    if err != nil {
+        respondError(w, http.StatusUnauthorized, "Not authenticated")
+        return
+    }
+    
+    var req struct {
+        IsPublic bool `json:"is_public"`
+    }
+    
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        respondError(w, http.StatusBadRequest, "Invalid request")
+        return
+    }
+    
+    _, err = h.repo.DB.Exec(`
+        UPDATE users SET is_public = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `, req.IsPublic, user.ID)
+    
+    if err != nil {
+        respondError(w, http.StatusInternalServerError, "Failed to update privacy")
+        return
+    }
+    
+    respondJSON(w, http.StatusOK, map[string]string{"message": "Privacy updated"})
 }
 ```
 
 ---
 
-## Files Modified
+## Summary
 
-### 1. frontend/src/app/register/page.tsx
-**Changes**:
-- Changed from checking `data.success` to checking `response.ok`
-- Changed error field from `data.message` to `data.error`
-- Added comment for clarity
+### Issues Found:
+1. ❌ Follow request notifications not being created/displayed
+2. ❌ Profile privacy toggle not persisting to database
 
-**Lines Changed**: 47-54
+### Frontend Status:
+✅ All frontend code is correct and working as expected
+✅ Proper API calls being made
+✅ Correct data being sent
 
-### 2. frontend/src/app/login/page.tsx
-**Changes**:
-- Changed from checking `data.success` to checking `response.ok`
-- Changed error field from `data.message` to `data.error`
-- Added comment for clarity
+### Backend Status:
+⚠️ Needs verification and potential fixes:
+1. Check if notifications are created on follow requests
+2. Check if UpdateProfile handler accepts and saves `is_public` field
 
-**Lines Changed**: 37-44
-
----
-
-## Testing Performed
-
-### Backend API Test
-```powershell
-Invoke-WebRequest -Uri "http://localhost:8080/api/auth/register" `
-  -Method POST `
-  -Headers @{"Content-Type"="application/json"} `
-  -Body '{"email":"test@test.com","password":"Test123!","first_name":"Test","last_name":"User","date_of_birth":"1990-01-01"}'
-```
-
-**Result**: ✅ Success
-- Status Code: 201 Created
-- Response: User object returned
-- Backend is working correctly
-
-### Frontend Fix Verification
-- ✅ Code changes applied to register page
-- ✅ Code changes applied to login page
-- ✅ Frontend recompiled successfully
-- ⏳ Manual browser testing required
+### Recommended Actions:
+1. Review backend `handlers.go` file
+2. Add/fix notification creation in SendFollowRequest
+3. Add/fix is_public field handling in UpdateProfile
+4. Test both features after backend fixes
 
 ---
 
-## Expected Behavior After Fix
+## Testing Checklist After Backend Fixes:
 
-### Registration Flow:
-1. User fills out registration form
-2. Frontend sends POST request to `/api/auth/register`
-3. Backend returns 201 status with user object
-4. Frontend checks `response.ok` (true for 2xx status)
-5. User is redirected to dashboard
-6. ✅ Registration successful
+### Follow Notifications:
+- [ ] User A follows User B (private profile)
+- [ ] User B sees notification "User A wants to follow you"
+- [ ] User B can accept/decline from notifications page
+- [ ] Notification count updates in real-time
 
-### Login Flow:
-1. User enters email and password
-2. Frontend sends POST request to `/api/auth/login`
-3. Backend returns 200 status with user object
-4. Frontend checks `response.ok` (true for 2xx status)
-5. User is redirected to dashboard
-6. ✅ Login successful
-
-### Error Handling:
-- If backend returns 4xx/5xx status
-- Frontend checks `response.ok` (false for error status)
-- Error message from `data.error` is displayed
-- User stays on login/register page
+### Privacy Toggle:
+- [ ] User toggles profile to Public
+- [ ] Saves changes
+- [ ] Refreshes page - should still be Public
+- [ ] Other users can now follow without request
+- [ ] Toggle back to Private
+- [ ] Saves changes
+- [ ] Refreshes page - should still be Private
+- [ ] Other users now need to send follow request
 
 ---
 
-## Verification Steps
-
-Please test the following:
-
-### Test 1: Registration
-1. Open http://localhost:3000
-2. Click "Get Started" or navigate to /register
-3. Fill in the form:
-   - Email: alice@test.com
-   - Password: Test123!
-   - First Name: Alice
-   - Last Name: Smith
-   - Date of Birth: 1990-01-01
-4. Click "Sign up"
-5. **Expected**: Redirected to dashboard (no error message)
-
-### Test 2: Login
-1. Navigate to /login
-2. Enter credentials:
-   - Email: alice@test.com
-   - Password: Test123!
-3. Click "Sign in"
-4. **Expected**: Redirected to dashboard (no error message)
-
-### Test 3: Invalid Login
-1. Navigate to /login
-2. Enter wrong credentials:
-   - Email: alice@test.com
-   - Password: WrongPassword
-3. Click "Sign in"
-4. **Expected**: Error message displayed (stays on login page)
-
----
-
-## Status
-
-- ✅ **Bug Identified**: Frontend/backend response format mismatch
-- ✅ **Root Cause Found**: Incorrect response handling in frontend
-- ✅ **Fix Applied**: Updated both login and register pages
-- ✅ **Code Compiled**: Frontend recompiled successfully
-- ⏳ **Testing Required**: Manual browser testing needed
-
----
-
-## Additional Notes
-
-### Other Potential Issues to Watch For
-
-1. **Session Management**: Verify that cookies are being set correctly after login
-2. **Dashboard Access**: Ensure dashboard checks authentication properly
-3. **Logout**: Verify logout functionality works
-4. **CORS**: Backend has CORS enabled for http://localhost:3000
-
-### Related Files That May Need Similar Fixes
-
-If other pages have similar authentication checks, they may need the same fix:
-- Profile pages
-- Post creation
-- Group management
-- Any other authenticated endpoints
-
----
-
-## Recommendation
-
-After verifying the fix works:
-1. ✅ Test registration with new user
-2. ✅ Test login with existing user
-3. ✅ Test error handling (wrong password)
-4. ✅ Test session persistence (refresh page)
-5. ✅ Test logout functionality
-
-If all tests pass, the authentication system is working correctly.
-
----
-
-## Conclusion
-
-**Issue**: ✅ **RESOLVED**
-
-The authentication failure was due to a mismatch between backend response format and frontend expectations. The fix properly checks HTTP status codes instead of looking for a non-existent `success` field.
-
-**Next Steps**: Please test the registration and login functionality to confirm the fix works as expected.
+## Notes:
+- All frontend null safety fixes have been applied
+- All features are implemented in the frontend
+- Backend API integration points are correct
+- Only backend logic needs verification/fixes
