@@ -35,6 +35,7 @@ export default function Dashboard() {
   const [uploading, setUploading] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const [ws, setWs] = useState<WebSocket | null>(null)
+  const [notifications, setNotifications] = useState<Array<{id: number, message: string}>>([])
 
   useEffect(() => {
     fetchUser()
@@ -68,14 +69,40 @@ export default function Dashboard() {
     }
     
     websocket.onmessage = (event) => {
-      const data = JSON.parse(event.data)
-      console.log('📥 Received:', data)
-      
-      // Handle new post notifications
-      if (data.type === 'new_post') {
-        // Refresh feed to show new post
-        fetchFeed()
-      }
+      // Handle multiple messages in one frame (separated by newlines)
+      const messages = event.data.trim().split('\n')
+
+      messages.forEach(messageStr => {
+        if (!messageStr.trim()) return // Skip empty messages
+
+        try {
+          const data = JSON.parse(messageStr)
+          console.log('📥 Received:', data)
+
+          // Handle new post notifications
+          if (data.type === 'new_post') {
+            // Refresh feed to show new post
+            fetchFeed()
+          }
+
+          // Handle real-time notifications
+          if (data.type === 'notification') {
+            // Show toast notification
+            const notifId = Date.now()
+            setNotifications(prev => [...prev, { id: notifId, message: data.content }])
+
+            // Update unread count
+            fetchUnreadCount()
+
+            // Auto-remove notification after 5 seconds
+            setTimeout(() => {
+              setNotifications(prev => prev.filter(n => n.id !== notifId))
+            }, 5000)
+          }
+        } catch (error) {
+          console.error('Failed to parse WebSocket message:', messageStr, error)
+        }
+      })
     }
     
     websocket.onerror = (error) => {
@@ -257,8 +284,32 @@ export default function Dashboard() {
     )
   }
 
+  const removeNotification = (id: number) => {
+    setNotifications(prev => prev.filter(n => n.id !== id))
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Toast Notifications */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {notifications.map((notif) => (
+          <div
+            key={notif.id}
+            className="bg-blue-600 text-white px-6 py-4 rounded-lg shadow-lg flex items-center justify-between min-w-[300px] animate-slide-in"
+          >
+            <div className="flex items-center">
+              <span className="text-2xl mr-3">💬</span>
+              <span className="font-medium">{notif.message}</span>
+            </div>
+            <button
+              onClick={() => removeNotification(notif.id)}
+              className="ml-4 text-white hover:text-gray-200"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+      </div>
       {/* Header */}
       <header className="bg-white shadow">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">

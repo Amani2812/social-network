@@ -92,6 +92,7 @@ func main() {
 	http.HandleFunc("/api/groups/create", enableCORS(handler.CreateGroup))
 	http.HandleFunc("/api/groups/get", enableCORS(handler.GetGroup))
 	http.HandleFunc("/api/groups/user", enableCORS(handler.GetUserGroups))
+	http.HandleFunc("/api/groups/all", enableCORS(handler.GetAllGroups))
 	http.HandleFunc("/api/groups/invite", enableCORS(handler.InviteToGroup))
 	http.HandleFunc("/api/groups/respond", enableCORS(handler.RespondToGroupInvite))
 	http.HandleFunc("/api/groups/posts/create", enableCORS(handler.CreateGroupPost))
@@ -105,6 +106,7 @@ func main() {
 	// Message routes
 	http.HandleFunc("/api/messages/private", enableCORS(handler.GetPrivateMessages))
 	http.HandleFunc("/api/messages/group", enableCORS(handler.GetGroupMessages))
+	http.HandleFunc("/api/messages/conversations", enableCORS(handler.GetConversations))
 
 	// Notification routes
 	http.HandleFunc("/api/notifications", enableCORS(handler.GetNotifications))

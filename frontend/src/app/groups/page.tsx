@@ -24,6 +24,7 @@ export default function Groups() {
   const router = useRouter()
   const [user, setUser] = useState<User | null>(null)
   const [groups, setGroups] = useState<Group[]>([])
+  const [allGroups, setAllGroups] = useState<Group[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [newGroupTitle, setNewGroupTitle] = useState('')
@@ -33,6 +34,7 @@ export default function Groups() {
   useEffect(() => {
     fetchUser()
     fetchGroups()
+    fetchAllGroups()
   }, [])
 
   const fetchUser = async () => {
@@ -70,6 +72,23 @@ export default function Groups() {
     }
   }
 
+  const fetchAllGroups = async () => {
+    try {
+      const response = await fetch('http://localhost:8080/api/groups/all', {
+        credentials: 'include',
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setAllGroups(data || [])
+      } else {
+        setAllGroups([])
+      }
+    } catch (err) {
+      console.error('Failed to fetch all groups:', err)
+      setAllGroups([])
+    }
+  }
+
   const handleCreateGroup = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newGroupTitle.trim()) return
@@ -94,6 +113,7 @@ export default function Groups() {
         setNewGroupDescription('')
         setShowCreateForm(false)
         fetchGroups() // Refresh groups list
+        fetchAllGroups() // Refresh all groups list
       } else {
         alert('Failed to create group')
       }
@@ -252,6 +272,68 @@ export default function Groups() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+
+        {/* Discover Groups Section */}
+        <div className="bg-white shadow rounded-lg mt-6">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-xl font-semibold text-gray-900">Discover Groups</h2>
+          </div>
+
+          {allGroups.length === 0 ? (
+            <div className="px-6 py-12 text-center">
+              <div className="text-gray-400 text-6xl mb-4">🔍</div>
+              <p className="text-gray-500 text-lg">No groups available</p>
+              <p className="text-gray-400 text-sm mt-2">
+                Be the first to create a group!
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-200">
+              {allGroups.map((group) => {
+                const isMember = groups.some(g => g.id === group.id)
+                return (
+                  <div
+                    key={group.id}
+                    className="px-6 py-4 hover:bg-gray-50 transition-colors"
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-lg font-semibold text-gray-900">
+                            {group.title}
+                          </h3>
+                          {isMember && (
+                            <span className="bg-green-100 text-green-800 text-xs font-medium px-2 py-1 rounded">
+                              Member
+                            </span>
+                          )}
+                        </div>
+                        {group.description && (
+                          <p className="text-gray-600 text-sm mb-2 mt-1">{group.description}</p>
+                        )}
+                        <p className="text-xs text-gray-500">
+                          Created {new Date(group.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <div className="ml-4">
+                        <button
+                          onClick={() => router.push(`/groups/${group.id}`)}
+                          className={`px-4 py-2 rounded-md font-semibold ${
+                            isMember
+                              ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                              : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                          }`}
+                        >
+                          {isMember ? 'View' : 'View Details'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>

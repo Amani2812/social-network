@@ -866,6 +866,27 @@ func (h *Handler) GetUserGroups(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, groups)
 }
 
+func (h *Handler) GetAllGroups(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	_, err := h.getUserFromSession(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	groups, err := h.repo.GetAllGroups()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get groups")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, groups)
+}
+
 func (h *Handler) InviteToGroup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -1145,6 +1166,27 @@ func (h *Handler) GetGroupMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, messages)
+}
+
+func (h *Handler) GetConversations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	user, err := h.getUserFromSession(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	conversations, err := h.repo.GetConversations(user.ID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get conversations")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, conversations)
 }
 
 // Notification handlers

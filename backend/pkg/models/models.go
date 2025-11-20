@@ -593,6 +593,28 @@ func (r *Repository) GetUserGroups(userID int) ([]*Group, error) {
 	return groups, nil
 }
 
+func (r *Repository) GetAllGroups() ([]*Group, error) {
+	rows, err := r.db.Query(
+		`SELECT id, creator_id, title, description, created_at 
+		FROM groups 
+		ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var groups []*Group
+	for rows.Next() {
+		group := &Group{}
+		if err := rows.Scan(&group.ID, &group.CreatorID, &group.Title, &group.Description, &group.CreatedAt); err != nil {
+			return nil, err
+		}
+		groups = append(groups, group)
+	}
+	return groups, nil
+}
+
 func (r *Repository) InviteToGroup(groupID, userID, inviterID int) error {
 	// Check if inviter is admin
 	var role string
@@ -838,6 +860,34 @@ func (r *Repository) GetGroupMembers(groupID int) ([]*GroupMember, error) {
 		members = append(members, member)
 	}
 	return members, nil
+}
+
+func (r *Repository) GetConversations(userID int) ([]*User, error) {
+	rows, err := r.db.Query(
+		`SELECT DISTINCT u.id, u.email, u.first_name, u.last_name, u.avatar_path, u.nickname
+		FROM users u
+		JOIN messages m ON (m.sender_id = u.id OR m.receiver_id = u.id)
+		WHERE (m.sender_id = ? OR m.receiver_id = ?) AND u.id != ?
+		ORDER BY (
+			SELECT MAX(created_at) FROM messages 
+			WHERE (sender_id = u.id AND receiver_id = ?) OR (sender_id = ? AND receiver_id = u.id)
+		) DESC`,
+		userID, userID, userID, userID, userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*User
+	for rows.Next() {
+		user := &User{}
+		if err := rows.Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.AvatarPath, &user.Nickname); err != nil {
+			return nil, err
+		}
+		users = append(users, user)
+	}
+	return users, nil
 }
 
 // Notification methods

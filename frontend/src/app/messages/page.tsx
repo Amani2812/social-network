@@ -92,34 +92,54 @@ export default function Messages() {
     }
     
     websocket.onmessage = (event) => {
-      const data = JSON.parse(event.data)
-      
-      if (data.type === 'private') {
-        const newMsg: Message = {
-          id: Date.now(),
-          sender_id: data.sender_id,
-          receiver_id: data.receiver_id,
-          content: data.content,
-          created_at: data.timestamp || new Date().toISOString(),
-        }
-        
-        // Add to messages immediately
-        setMessages(prev => [...prev, newMsg])
-        
-        // Add sender to conversations if new
-        if (newMsg.sender_id !== currentUser.id) {
-          setConversations(prev => {
-            if (!prev.some(u => u.id === newMsg.sender_id)) {
-              fetchUserById(newMsg.sender_id).then(user => {
-                if (user) {
-                  setConversations(p => [user, ...p])
+      // Handle multiple messages in one frame (separated by newlines)
+      const messageStrings = event.data.trim().split('\n')
+
+      messageStrings.forEach((messageStr: string) => {
+        if (!messageStr.trim()) return // Skip empty messages
+
+        try {
+          const data = JSON.parse(messageStr)
+          console.log('📥 Messages page received:', data)
+
+          if (data.type === 'private') {
+            const newMsg: Message = {
+              id: Date.now(),
+              sender_id: data.sender_id,
+              receiver_id: data.receiver_id,
+              content: data.content,
+              created_at: data.timestamp || new Date().toISOString(),
+            }
+
+            // Only add message if it's relevant to current conversation
+            if (selectedUserRef.current) {
+              const isRelevant =
+                (newMsg.sender_id === selectedUserRef.current.id && newMsg.receiver_id === currentUser.id) ||
+                (newMsg.sender_id === currentUser.id && newMsg.receiver_id === selectedUserRef.current.id)
+
+              if (isRelevant) {
+                setMessages(prev => [...prev, newMsg])
+              }
+            }
+
+            // Add sender to conversations if new and it's not from current user
+            if (newMsg.sender_id !== currentUser.id) {
+              setConversations(prev => {
+                if (!prev.some(u => u.id === newMsg.sender_id)) {
+                  fetchUserById(newMsg.sender_id).then(user => {
+                    if (user) {
+                      setConversations(p => [user, ...p])
+                    }
+                  })
                 }
+                return prev
               })
             }
-            return prev
-          })
+          }
+        } catch (error) {
+          console.error('Failed to parse WebSocket message:', messageStr, error)
         }
-      }
+      })
     }
     
     websocket.onerror = (error) => {
@@ -177,12 +197,22 @@ export default function Messages() {
 
   const fetchConversations = async (userId: number) => {
     try {
-      const response = await fetch(`http://localhost:8080/api/follow/following?user_id=${userId}`, {
+      // Get all users who have messaged with this user
+      const response = await fetch(`http://localhost:8080/api/messages/conversations`, {
         credentials: 'include',
       })
       if (response.ok) {
         const data = await response.json()
         setConversations(data || [])
+      } else {
+        // Fallback to followers if conversations endpoint doesn't exist
+        const fallbackResponse = await fetch(`http://localhost:8080/api/follow/following?user_id=${userId}`, {
+          credentials: 'include',
+        })
+        if (fallbackResponse.ok) {
+          const data = await fallbackResponse.json()
+          setConversations(data || [])
+        }
       }
     } catch (err) {
       console.error('Failed to fetch conversations')

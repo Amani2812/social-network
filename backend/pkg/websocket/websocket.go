@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
@@ -62,7 +63,7 @@ func (h *Hub) BroadcastNewPost(postID int, userID int) {
 }
 
 type Message struct {
-	Type       string `json:"type"` // "private", "group"
+	Type       string `json:"type"` // "private", "group", "notification"
 	SenderID   int    `json:"sender_id"`
 	ReceiverID *int   `json:"receiver_id,omitempty"`
 	GroupID    *int   `json:"group_id,omitempty"`
@@ -105,6 +106,13 @@ func (h *Hub) Run() {
 
 			// Send to appropriate recipients
 			if message.Type == "private" && message.ReceiverID != nil {
+				// Send real-time notification to receiver if they're online
+				sender, err := h.repo.GetUserByID(message.SenderID)
+				if err == nil {
+					notifContent := fmt.Sprintf("%s %s sent you a message", sender.FirstName, sender.LastName)
+					h.SendNotificationToUser(*message.ReceiverID, "message", notifContent, message.SenderID)
+				}
+				
 				h.sendToUser(*message.ReceiverID, message)
 				h.sendToUser(message.SenderID, message) // Echo back to sender
 			} else if message.Type == "group" && message.GroupID != nil {
@@ -128,6 +136,37 @@ func (h *Hub) sendToUser(userID int, message *Message) {
 			close(client.send)
 			delete(h.clients, userID)
 			h.mu.Unlock()
+		}
+	} else {
+		// User is offline, create a notification
+		if message.Type == "private" && message.SenderID != userID {
+			sender, err := h.repo.GetUserByID(message.SenderID)
+			if err == nil {
+				content := fmt.Sprintf("%s %s sent you a message", sender.FirstName, sender.LastName)
+				h.repo.CreateNotification(userID, "message", content, &message.SenderID)
+			}
+		}
+	}
+}
+
+// SendNotificationToUser sends a real-time notification to a specific user
+func (h *Hub) SendNotificationToUser(userID int, notifType, content string, senderID int) {
+	h.mu.RLock()
+	client, ok := h.clients[userID]
+	h.mu.RUnlock()
+
+	if ok {
+		notification := &Message{
+			Type:      "notification",
+			SenderID:  senderID,
+			Content:   content,
+			Timestamp: time.Now().Format(time.RFC3339),
+		}
+		data, _ := json.Marshal(notification)
+		select {
+		case client.send <- data:
+		default:
+			// Channel full, skip
 		}
 	}
 }

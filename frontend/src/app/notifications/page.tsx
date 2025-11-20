@@ -143,6 +143,8 @@ export default function Notifications() {
       router.push(`/groups/${notification.related_id}`)
     } else if (notification.type === 'event_invite' && notification.related_id) {
       router.push(`/events/${notification.related_id}`)
+    } else if (notification.type === 'message' && notification.related_id) {
+      router.push(`/messages?user=${notification.related_id}`)
     }
   }
 
@@ -156,6 +158,8 @@ export default function Notifications() {
         return '📅'
       case 'new_post':
         return '📝'
+      case 'message':
+        return '💬'
       default:
         return '🔔'
     }
