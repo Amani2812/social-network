@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 
 interface User {
@@ -27,13 +27,115 @@ export default function Notifications() {
   const [user, setUser] = useState<User | null>(null)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(true)
+  const [ws, setWs] = useState<WebSocket | null>(null)
   const [unreadCount, setUnreadCount] = useState(0)
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectAttemptsRef = useRef(0)
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const isConnectingRef = useRef(false)
+  const MAX_RECONNECT_ATTEMPTS = 10
 
   useEffect(() => {
     fetchUser()
     fetchNotifications()
     fetchUnreadCount()
+    connectWebSocket()
+
+    return () => {
+      // Cleanup on unmount
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+      }
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
+    }
   }, [])
+
+  const connectWebSocket = () => {
+    // Prevent multiple simultaneous connection attempts
+    if (isConnectingRef.current) {
+      console.log('⏳ Connection attempt already in progress')
+      return
+    }
+
+    // Check if already connected
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      console.log('✅ WebSocket already connected')
+      return
+    }
+
+    // Check reconnection attempts
+    if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+      console.error('❌ Max reconnection attempts reached. Please refresh the page.')
+      return
+    }
+
+    isConnectingRef.current = true
+    console.log(`🔄 Connecting to WebSocket... (Attempt ${reconnectAttemptsRef.current + 1})`)
+
+    try {
+      const websocket = new WebSocket('ws://localhost:8080/ws')
+
+      websocket.onopen = () => {
+        console.log('✅ Notifications WebSocket connected')
+        reconnectAttemptsRef.current = 0 // Reset counter on successful connection
+        isConnectingRef.current = false
+      }
+
+      websocket.onmessage = (event) => {
+        const messages = event.data.trim().split('\n')
+
+        messages.forEach((messageStr: string) => {
+          if (!messageStr.trim()) return
+
+          try {
+            const data = JSON.parse(messageStr)
+            console.log('📥 Notification received:', data)
+
+            // Handle real-time notifications
+            if (data.type === 'notification') {
+              // Refresh notifications list
+              fetchNotifications()
+              fetchUnreadCount()
+            }
+          } catch (error) {
+            console.error('Failed to parse WebSocket message:', messageStr, error)
+          }
+        })
+      }
+
+      websocket.onerror = (error) => {
+        console.log('⚠️ WebSocket connection error (this is normal during reconnection):', error)
+        isConnectingRef.current = false
+      }
+
+      websocket.onclose = (event) => {
+        console.log(`🔌 WebSocket closed: ${event.code} - ${event.reason || 'No reason provided'}`)
+        isConnectingRef.current = false
+        wsRef.current = null
+        setWs(null)
+
+        // Attempt to reconnect with exponential backoff
+        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttemptsRef.current++
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 30000)
+          console.log(`⏳ Reconnecting in ${delay / 1000} seconds...`)
+
+          reconnectTimeoutRef.current = setTimeout(() => {
+            connectWebSocket()
+          }, delay)
+        }
+      }
+
+      wsRef.current = websocket
+      setWs(websocket)
+    } catch (error) {
+      console.error('❌ Failed to create WebSocket connection:', error)
+      isConnectingRef.current = false
+    }
+  }
 
   const fetchUser = async () => {
     try {
@@ -130,16 +232,87 @@ export default function Notifications() {
     }
   }
 
+  const handleAcceptFollowRequest = async (notification: Notification, e: React.MouseEvent) => {
+    e.stopPropagation() // Prevent notification click
+    
+    if (!notification.related_id) return
+
+    try {
+      const response = await fetch('http://localhost:8080/api/follow/respond', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          follower_id: notification.related_id,
+          accept: true,
+        }),
+        credentials: 'include',
+      })
+
+      if (response.ok) {
+        // Mark notification as read and refresh
+        await markAsRead(notification.id)
+        await fetchNotifications()
+        await fetchUnreadCount()
+        alert('Follow request accepted! ✓')
+      } else {
+        const errorData = await response.json()
+        alert(`Failed to accept: ${errorData.error || 'Unknown error'}`)
+      }
+    } catch (err) {
+      console.error('Failed to accept follow request:', err)
+      alert('Failed to accept follow request')
+    }
+  }
+
+  const handleDeclineFollowRequest = async (notification: Notification, e: React.MouseEvent) => {
+    e.stopPropagation() // Prevent notification click
+    
+    if (!notification.related_id) return
+
+    try {
+      const response = await fetch('http://localhost:8080/api/follow/respond', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          follower_id: notification.related_id,
+          accept: false,
+        }),
+        credentials: 'include',
+      })
+
+      if (response.ok) {
+        // Mark notification as read and refresh
+        await markAsRead(notification.id)
+        await fetchNotifications()
+        await fetchUnreadCount()
+        alert('Follow request declined ✗')
+      } else {
+        const errorData = await response.json()
+        alert(`Failed to decline: ${errorData.error || 'Unknown error'}`)
+      }
+    } catch (err) {
+      console.error('Failed to decline follow request:', err)
+      alert('Failed to decline follow request')
+    }
+  }
+
   const handleNotificationClick = (notification: Notification) => {
+    // Don't navigate for follow requests (they have action buttons)
+    if (notification.type === 'follow_request') {
+      return
+    }
+
     // Mark as read
     if (!notification.is_read) {
       markAsRead(notification.id)
     }
 
     // Navigate based on notification type
-    if (notification.type === 'follow_request' && notification.related_id) {
-      router.push(`/profile/${notification.related_id}`)
-    } else if (notification.type === 'group_invite' && notification.related_id) {
+    if (notification.type === 'group_invite' && notification.related_id) {
       router.push(`/groups/${notification.related_id}`)
     } else if (notification.type === 'event_invite' && notification.related_id) {
       router.push(`/events/${notification.related_id}`)
@@ -255,7 +428,9 @@ export default function Notifications() {
                 <div
                   key={notification.id}
                   onClick={() => handleNotificationClick(notification)}
-                  className={`px-6 py-4 cursor-pointer transition-colors ${
+                  className={`px-6 py-4 transition-colors ${
+                    notification.type === 'follow_request' ? '' : 'cursor-pointer'
+                  } ${
                     notification.is_read
                       ? 'bg-white hover:bg-gray-50'
                       : 'bg-blue-50 hover:bg-blue-100'
@@ -274,6 +449,24 @@ export default function Notifications() {
                       <p className="text-xs text-gray-500 mt-1">
                         {new Date(notification.created_at).toLocaleString()}
                       </p>
+                      
+                      {/* Accept/Decline buttons for follow requests */}
+                      {notification.type === 'follow_request' && !notification.is_read && (
+                        <div className="flex space-x-2 mt-3">
+                          <button
+                            onClick={(e) => handleAcceptFollowRequest(notification, e)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                          >
+                            ✓ Accept
+                          </button>
+                          <button
+                            onClick={(e) => handleDeclineFollowRequest(notification, e)}
+                            className="bg-gray-300 hover:bg-gray-400 text-gray-700 px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                          >
+                            ✗ Decline
+                          </button>
+                        </div>
+                      )}
                     </div>
                     {!notification.is_read && (
                       <div className="flex-shrink-0 ml-4">

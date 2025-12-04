@@ -318,7 +318,33 @@ export default function Groups() {
                           Created {new Date(group.created_at).toLocaleDateString()}
                         </p>
                       </div>
-                      <div className="ml-4">
+                      <div className="ml-4 flex gap-2">
+                        {!isMember && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation()
+                              try {
+                                const response = await fetch('http://localhost:8080/api/groups/join/request', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ group_id: group.id }),
+                                  credentials: 'include',
+                                })
+                                if (response.ok) {
+                                  alert('Join request sent! ✓')
+                                } else {
+                                  const error = await response.json()
+                                  alert(error.error || 'Failed to send request')
+                                }
+                              } catch (err) {
+                                alert('Failed to send join request')
+                              }
+                            }}
+                            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md font-semibold"
+                          >
+                            Request to Join
+                          </button>
+                        )}
                         <button
                           onClick={() => router.push(`/groups/${group.id}`)}
                           className={`px-4 py-2 rounded-md font-semibold ${
@@ -327,7 +353,7 @@ export default function Groups() {
                               : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
                           }`}
                         >
-                          {isMember ? 'View' : 'View Details'}
+                          {isMember ? 'Open Group' : 'View Details'}
                         </button>
                       </div>
                     </div>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Comments from '@/components/Comments'
 
@@ -36,6 +36,11 @@ export default function Dashboard() {
   const [unreadCount, setUnreadCount] = useState(0)
   const [ws, setWs] = useState<WebSocket | null>(null)
   const [notifications, setNotifications] = useState<Array<{id: number, message: string}>>([])
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectAttemptsRef = useRef(0)
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const isConnectingRef = useRef(false)
+  const MAX_RECONNECT_ATTEMPTS = 10
 
   useEffect(() => {
     fetchUser()
@@ -53,8 +58,13 @@ export default function Dashboard() {
     }
     
     return () => {
-      if (ws) {
-        ws.close()
+      // Cleanup on unmount
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+      }
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
       }
     }
   }, [user])
@@ -62,64 +72,107 @@ export default function Dashboard() {
   const connectWebSocket = () => {
     if (!user) return
     
-    const websocket = new WebSocket('ws://localhost:8080/ws')
-    
-    websocket.onopen = () => {
-      console.log('✅ Dashboard WebSocket connected')
+    // Prevent multiple simultaneous connection attempts
+    if (isConnectingRef.current) {
+      console.log('⏳ Connection attempt already in progress')
+      return
     }
     
-    websocket.onmessage = (event) => {
-      // Handle multiple messages in one frame (separated by newlines)
-      const messages = event.data.trim().split('\n')
+    // Check if already connected
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      console.log('✅ WebSocket already connected')
+      return
+    }
+    
+    // Check reconnection attempts
+    if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+      console.error('❌ Max reconnection attempts reached. Please refresh the page.')
+      return
+    }
+    
+    isConnectingRef.current = true
+    console.log(`🔄 Connecting to WebSocket... (Attempt ${reconnectAttemptsRef.current + 1})`)
+    
+    try {
+      const websocket = new WebSocket('ws://localhost:8080/ws')
+      
+      websocket.onopen = () => {
+        console.log('✅ Dashboard WebSocket connected')
+        reconnectAttemptsRef.current = 0 // Reset counter on successful connection
+        isConnectingRef.current = false
+      }
 
-      messages.forEach(messageStr => {
-        if (!messageStr.trim()) return // Skip empty messages
-
-        try {
-          const data = JSON.parse(messageStr)
-          console.log('📥 Received:', data)
-
-          // Handle new post notifications
-          if (data.type === 'new_post') {
-            // Refresh feed to show new post
-            fetchFeed()
-          }
-
-          // Handle real-time notifications
-          if (data.type === 'notification') {
-            // Show toast notification
-            const notifId = Date.now()
-            setNotifications(prev => [...prev, { id: notifId, message: data.content }])
-
-            // Update unread count
-            fetchUnreadCount()
-
-            // Auto-remove notification after 5 seconds
-            setTimeout(() => {
-              setNotifications(prev => prev.filter(n => n.id !== notifId))
-            }, 5000)
-          }
-        } catch (error) {
-          console.error('Failed to parse WebSocket message:', messageStr, error)
-        }
+      // Handle ping from server - browser automatically responds with pong
+      websocket.addEventListener('ping', () => {
+        console.log('🏓 Received ping from server')
       })
-    }
-    
-    websocket.onerror = (error) => {
-      console.error('WebSocket error:', error)
-    }
-    
-    websocket.onclose = () => {
-      console.log('WebSocket disconnected')
-      // Reconnect after 3 seconds
-      setTimeout(() => {
-        if (user) {
-          connectWebSocket()
+      
+      websocket.onmessage = (event) => {
+        // Handle multiple messages in one frame (separated by newlines)
+        const messages = event.data.trim().split('\n')
+
+        messages.forEach((messageStr: string) => {
+          if (!messageStr.trim()) return // Skip empty messages
+
+          try {
+            const data = JSON.parse(messageStr)
+            console.log('📥 Received:', data)
+
+            // Handle new post notifications
+            if (data.type === 'new_post') {
+              // Refresh feed to show new post
+              fetchFeed()
+            }
+
+            // Handle real-time notifications
+            if (data.type === 'notification') {
+              // Show toast notification
+              const notifId = Date.now()
+              setNotifications(prev => [...prev, { id: notifId, message: data.content }])
+
+              // Update unread count
+              fetchUnreadCount()
+
+              // Auto-remove notification after 5 seconds
+              setTimeout(() => {
+                setNotifications(prev => prev.filter(n => n.id !== notifId))
+              }, 5000)
+            }
+          } catch (error) {
+            console.error('Failed to parse WebSocket message:', messageStr, error)
+          }
+        })
+      }
+      
+      websocket.onerror = (error) => {
+        console.log('⚠️ WebSocket connection error (this is normal during reconnection):', error)
+        isConnectingRef.current = false
+      }
+      
+      websocket.onclose = (event) => {
+        console.log(`🔌 WebSocket closed: ${event.code} - ${event.reason || 'No reason provided'}`)
+        isConnectingRef.current = false
+        wsRef.current = null
+        setWs(null)
+        
+        // Attempt to reconnect with exponential backoff
+        if (user && reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttemptsRef.current++
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 30000)
+          console.log(`⏳ Reconnecting in ${delay / 1000} seconds...`)
+          
+          reconnectTimeoutRef.current = setTimeout(() => {
+            connectWebSocket()
+          }, delay)
         }
-      }, 3000)
+      }
+      
+      wsRef.current = websocket
+      setWs(websocket)
+    } catch (error) {
+      console.error('❌ Failed to create WebSocket connection:', error)
+      isConnectingRef.current = false
     }
-    
-    setWs(websocket)
   }
 
   const fetchUnreadCount = async () => {

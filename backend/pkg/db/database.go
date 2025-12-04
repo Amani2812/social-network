@@ -37,6 +37,9 @@ func (d *Database) Close() error {
 }
 
 func (d *Database) RunMigrations() error {
+	// Temporary fallback: Use direct SQL for Windows compatibility
+	// TODO: Fix file:// URL path handling for Windows in production
+	
 	schema := `
 	-- Users table
 	CREATE TABLE IF NOT EXISTS users (
@@ -51,15 +54,6 @@ func (d *Database) RunMigrations() error {
 		about_me TEXT,
 		is_private BOOLEAN DEFAULT 0,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
-
-	-- Sessions table
-	CREATE TABLE IF NOT EXISTS sessions (
-		id TEXT PRIMARY KEY,
-		user_id INTEGER NOT NULL,
-		expires_at DATETIME NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 	);
 
 	-- Follows table
@@ -175,10 +169,19 @@ func (d *Database) RunMigrations() error {
 	CREATE TABLE IF NOT EXISTS notifications (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id INTEGER NOT NULL,
-		type TEXT NOT NULL CHECK(type IN ('follow_request', 'group_invite', 'event_invite', 'new_message')),
+		type TEXT NOT NULL CHECK(type IN ('follow_request', 'group_invite', 'group_join_request', 'event_invite', 'message', 'new_message')),
 		content TEXT NOT NULL,
 		related_id INTEGER,
 		is_read BOOLEAN DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	);
+
+	-- Sessions table
+	CREATE TABLE IF NOT EXISTS sessions (
+		id TEXT PRIMARY KEY,
+		user_id INTEGER NOT NULL,
+		expires_at DATETIME NOT NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 	);

@@ -13,6 +13,20 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	// Time allowed to write a message to the peer
+	writeWait = 10 * time.Second
+
+	// Time allowed to read the next pong message from the peer
+	pongWait = 60 * time.Second
+
+	// Send pings to peer with this period. Must be less than pongWait
+	pingPeriod = (pongWait * 9) / 10
+
+	// Maximum message size allowed from peer
+	maxMessageSize = 512 * 1024
+)
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -113,8 +127,8 @@ func (h *Hub) Run() {
 					h.SendNotificationToUser(*message.ReceiverID, "message", notifContent, message.SenderID)
 				}
 				
+				// Only send to receiver, not back to sender (sender handles optimistically)
 				h.sendToUser(*message.ReceiverID, message)
-				h.sendToUser(message.SenderID, message) // Echo back to sender
 			} else if message.Type == "group" && message.GroupID != nil {
 				h.sendToGroup(*message.GroupID, message)
 			}
@@ -131,11 +145,17 @@ func (h *Hub) sendToUser(userID int, message *Message) {
 		data, _ := json.Marshal(message)
 		select {
 		case client.send <- data:
+			log.Printf("Message sent to user %d", userID)
 		default:
-			h.mu.Lock()
-			close(client.send)
-			delete(h.clients, userID)
-			h.mu.Unlock()
+			// Channel full, but don't close connection - just log it
+			log.Printf("Warning: Send channel full for user %d, message may be delayed", userID)
+			// Try one more time with a timeout
+			select {
+			case client.send <- data:
+				log.Printf("Message sent to user %d on retry", userID)
+			case <-time.After(2 * time.Second):
+				log.Printf("Failed to send message to user %d after timeout", userID)
+			}
 		}
 	} else {
 		// User is offline, create a notification
@@ -171,6 +191,28 @@ func (h *Hub) SendNotificationToUser(userID int, notifType, content string, send
 	}
 }
 
+// SendFollowStatusUpdate sends a real-time follow status update to a user
+func (h *Hub) SendFollowStatusUpdate(userID int) {
+	h.mu.RLock()
+	client, ok := h.clients[userID]
+	h.mu.RUnlock()
+
+	if ok {
+		statusUpdate := &Message{
+			Type:      "follow_status_update",
+			SenderID:  0,
+			Content:   "Follow status updated",
+			Timestamp: time.Now().Format(time.RFC3339),
+		}
+		data, _ := json.Marshal(statusUpdate)
+		select {
+		case client.send <- data:
+		default:
+			// Channel full, skip
+		}
+	}
+}
+
 func (h *Hub) sendToGroup(groupID int, message *Message) {
 	// Get all group members
 	members, err := h.repo.GetGroupMembers(groupID)
@@ -198,11 +240,14 @@ func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
 		c.conn.Close()
+		log.Printf("Client %d disconnected from readPump", c.userID)
 	}()
 
-	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetReadLimit(maxMessageSize)
+	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		log.Printf("✅ Received pong from client %d", c.userID)
+		c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 
@@ -210,14 +255,19 @@ func (c *Client) readPump() {
 		_, messageData, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error: %v", err)
+				log.Printf("❌ WebSocket error for client %d: %v", c.userID, err)
+			} else {
+				log.Printf("🔌 Client %d connection closed: %v", c.userID, err)
 			}
 			break
 		}
 
+		// Reset read deadline on any message received
+		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+
 		var msg Message
 		if err := json.Unmarshal(messageData, &msg); err != nil {
-			log.Printf("error unmarshaling message: %v", err)
+			log.Printf("⚠️ Error unmarshaling message from client %d: %v", c.userID, err)
 			continue
 		}
 
@@ -225,33 +275,37 @@ func (c *Client) readPump() {
 		msg.Username = c.username
 		msg.Timestamp = time.Now().Format(time.RFC3339)
 
+		log.Printf("📨 Broadcasting message from client %d: type=%s", c.userID, msg.Type)
 		c.hub.broadcast <- &msg
 	}
 }
 
 func (c *Client) writePump() {
-	ticker := time.NewTicker(54 * time.Second)
+	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
+		log.Printf("🔌 Client %d disconnected from writePump", c.userID)
 	}()
 
 	for {
 		select {
 		case message, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
+				// The hub closed the channel
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
 			w, err := c.conn.NextWriter(websocket.TextMessage)
 			if err != nil {
+				log.Printf("❌ Error getting writer for client %d: %v", c.userID, err)
 				return
 			}
 			w.Write(message)
 
-			// Add queued messages
+			// Add queued messages to the current websocket message
 			n := len(c.send)
 			for i := 0; i < n; i++ {
 				w.Write([]byte{'\n'})
@@ -259,14 +313,17 @@ func (c *Client) writePump() {
 			}
 
 			if err := w.Close(); err != nil {
+				log.Printf("❌ Error closing writer for client %d: %v", c.userID, err)
 				return
 			}
 
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("❌ Error sending ping to client %d: %v", c.userID, err)
 				return
 			}
+			log.Printf("🏓 Sent ping to client %d", c.userID)
 		}
 	}
 }
@@ -300,7 +357,7 @@ func ServeWs(hub *Hub, repo *models.Repository, w http.ResponseWriter, r *http.R
 	client := &Client{
 		hub:      hub,
 		conn:     conn,
-		send:     make(chan []byte, 256),
+		send:     make(chan []byte, 1024), // Increased buffer size
 		userID:   user.ID,
 		username: user.FirstName + " " + user.LastName,
 	}

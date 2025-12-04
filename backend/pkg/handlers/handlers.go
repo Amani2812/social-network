@@ -20,10 +20,12 @@ type Handler struct {
 	repo *models.Repository
 	hub  interface {
 		BroadcastNewPost(postID int, userID int)
+		SendFollowStatusUpdate(userID int)
+		SendNotificationToUser(userID int, notifType, content string, senderID int)
 	}
 }
 
-func NewHandler(repo *models.Repository, hub interface{ BroadcastNewPost(postID int, userID int) }) *Handler {
+func NewHandler(repo *models.Repository, hub interface{ BroadcastNewPost(postID int, userID int); SendFollowStatusUpdate(userID int); SendNotificationToUser(userID int, notifType, content string, senderID int) }) *Handler {
 	return &Handler{
 		repo: repo,
 		hub:  hub,
@@ -356,6 +358,9 @@ func (h *Handler) RespondToFollowRequest(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusInternalServerError, "Failed to respond to follow request")
 		return
 	}
+
+	// Send real-time WebSocket notification to the follower
+	h.hub.SendFollowStatusUpdate(req.FollowerID)
 
 	respondJSON(w, http.StatusOK, map[string]string{"message": "Follow request updated"})
 }
@@ -954,6 +959,140 @@ func (h *Handler) RespondToGroupInvite(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"message": "Response recorded"})
 }
 
+func (h *Handler) RequestToJoinGroup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	user, err := h.getUserFromSession(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	var req struct {
+		GroupID int `json:"group_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.repo.RequestToJoinGroup(req.GroupID, user.ID); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Create notification for group admins
+	group, _ := h.repo.GetGroup(req.GroupID)
+	if group != nil {
+		members, _ := h.repo.GetGroupMembers(req.GroupID)
+		for _, member := range members {
+			if member.Role == "admin" {
+				content := fmt.Sprintf("%s %s wants to join %s", user.FirstName, user.LastName, group.Title)
+				h.repo.CreateNotification(member.UserID, "group_join_request", content, &req.GroupID)
+				// Send real-time notification via WebSocket
+				h.hub.SendNotificationToUser(member.UserID, "group_join_request", content, user.ID)
+			}
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"message": "Join request sent"})
+}
+
+func (h *Handler) GetGroupJoinRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	user, err := h.getUserFromSession(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	groupIDStr := r.URL.Query().Get("group_id")
+	groupID, err := strconv.Atoi(groupIDStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid group ID")
+		return
+	}
+
+	// Check if user is admin of the group
+	members, err := h.repo.GetGroupMembers(groupID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get group members")
+		return
+	}
+
+	isAdmin := false
+	for _, member := range members {
+		if member.UserID == user.ID && member.Role == "admin" {
+			isAdmin = true
+			break
+		}
+	}
+
+	if !isAdmin {
+		respondError(w, http.StatusForbidden, "Only admins can view join requests")
+		return
+	}
+
+	requests, err := h.repo.GetGroupJoinRequests(groupID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get join requests")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, requests)
+}
+
+func (h *Handler) RespondToJoinRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	user, err := h.getUserFromSession(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	var req struct {
+		GroupID int  `json:"group_id"`
+		UserID  int  `json:"user_id"`
+		Accept  bool `json:"accept"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.repo.RespondToJoinRequest(req.GroupID, req.UserID, user.ID, req.Accept); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Create notification for the requester
+	group, _ := h.repo.GetGroup(req.GroupID)
+	if group != nil {
+		var content string
+		if req.Accept {
+			content = fmt.Sprintf("Your request to join %s has been accepted", group.Title)
+		} else {
+			content = fmt.Sprintf("Your request to join %s has been declined", group.Title)
+		}
+		h.repo.CreateNotification(req.UserID, "group_join_request", content, &req.GroupID)
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"message": "Response recorded"})
+}
+
 func (h *Handler) CreateGroupPost(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -1058,6 +1197,8 @@ func (h *Handler) CreateEvent(w http.ResponseWriter, r *http.Request) {
 			if member.UserID != user.ID {
 				content := fmt.Sprintf("New event in %s: %s", group.Title, req.Title)
 				h.repo.CreateNotification(member.UserID, "event_invite", content, &event.ID)
+				// Send real-time notification via WebSocket
+				h.hub.SendNotificationToUser(member.UserID, "event_invite", content, user.ID)
 			}
 		}
 	}
@@ -1071,6 +1212,12 @@ func (h *Handler) GetGroupEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user, err := h.getUserFromSession(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
 	groupIDStr := r.URL.Query().Get("group_id")
 	groupID, err := strconv.Atoi(groupIDStr)
 	if err != nil {
@@ -1078,7 +1225,7 @@ func (h *Handler) GetGroupEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, err := h.repo.GetGroupEvents(groupID)
+	events, err := h.repo.GetGroupEventsWithUserResponse(groupID, user.ID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to get events")
 		return

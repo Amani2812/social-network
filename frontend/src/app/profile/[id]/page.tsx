@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 
 interface User {
@@ -49,11 +49,119 @@ export default function Profile() {
   const [error, setError] = useState('')
   const [showFollowersModal, setShowFollowersModal] = useState(false)
   const [showFollowingModal, setShowFollowingModal] = useState(false)
+  const [ws, setWs] = useState<WebSocket | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectAttemptsRef = useRef(0)
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const isConnectingRef = useRef(false)
+  const MAX_RECONNECT_ATTEMPTS = 10
 
   useEffect(() => {
     fetchProfile()
     fetchCurrentUser()
   }, [params.id])
+
+  useEffect(() => {
+    if (currentUser) {
+      connectWebSocket()
+    }
+    
+    return () => {
+      // Cleanup on unmount
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+      }
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
+    }
+  }, [currentUser])
+
+  const connectWebSocket = () => {
+    if (!currentUser) return
+    
+    // Prevent multiple simultaneous connection attempts
+    if (isConnectingRef.current) {
+      console.log('⏳ Connection attempt already in progress')
+      return
+    }
+    
+    // Check if already connected
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      console.log('✅ WebSocket already connected')
+      return
+    }
+    
+    // Check reconnection attempts
+    if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+      console.error('❌ Max reconnection attempts reached. Please refresh the page.')
+      return
+    }
+    
+    isConnectingRef.current = true
+    console.log(`🔄 Connecting to WebSocket... (Attempt ${reconnectAttemptsRef.current + 1})`)
+    
+    try {
+      const websocket = new WebSocket('ws://localhost:8080/ws')
+      
+      websocket.onopen = () => {
+        console.log('✅ Profile WebSocket connected')
+        reconnectAttemptsRef.current = 0 // Reset counter on successful connection
+        isConnectingRef.current = false
+      }
+      
+      websocket.onmessage = (event) => {
+        const messages = event.data.trim().split('\n')
+
+        messages.forEach((messageStr: string) => {
+          if (!messageStr.trim()) return
+
+          try {
+            const data = JSON.parse(messageStr)
+            console.log('📥 Profile received:', data)
+
+            // Handle follow status updates
+            if (data.type === 'follow_accepted' || data.type === 'follow_status_update') {
+              // Refresh follow data to show updated status
+              fetchFollowData()
+            }
+          } catch (error) {
+            console.error('Failed to parse WebSocket message:', messageStr, error)
+          }
+        })
+      }
+      
+      websocket.onerror = (error) => {
+        console.error('❌ WebSocket error:', error)
+        isConnectingRef.current = false
+      }
+      
+      websocket.onclose = (event) => {
+        console.log(`🔌 WebSocket closed: ${event.code} - ${event.reason || 'No reason provided'}`)
+        isConnectingRef.current = false
+        wsRef.current = null
+        setWs(null)
+        
+        // Attempt to reconnect with exponential backoff
+        if (currentUser && reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttemptsRef.current++
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 30000)
+          console.log(`⏳ Reconnecting in ${delay / 1000} seconds...`)
+          
+          reconnectTimeoutRef.current = setTimeout(() => {
+            connectWebSocket()
+          }, delay)
+        }
+      }
+      
+      wsRef.current = websocket
+      setWs(websocket)
+    } catch (error) {
+      console.error('❌ Failed to create WebSocket connection:', error)
+      isConnectingRef.current = false
+    }
+  }
 
   const fetchProfile = async () => {
     try {
@@ -155,11 +263,8 @@ export default function Profile() {
       })
 
       if (response.ok) {
-        if (user!.is_public) {
-          setIsFollowing(true)
-        } else {
-          setHasPendingRequest(true)
-        }
+        // Refresh follow status after sending request
+        await fetchFollowData()
       }
     } catch (err) {
       console.error('Failed to send follow request:', err)
@@ -174,8 +279,8 @@ export default function Profile() {
       })
 
       if (response.ok) {
-        setIsFollowing(false)
-        setHasPendingRequest(false)
+        // Refresh follow status after unfollowing
+        await fetchFollowData()
       }
     } catch (err) {
       console.error('Failed to unfollow:', err)

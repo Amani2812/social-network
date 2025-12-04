@@ -38,6 +38,7 @@ interface Event {
   description?: string
   event_time: string
   created_at: string
+  user_response?: string
 }
 
 export default function GroupDetail() {
@@ -48,7 +49,19 @@ export default function GroupDetail() {
   const [posts, setPosts] = useState<GroupPost[]>([])
   const [events, setEvents] = useState<Event[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'posts' | 'events'>('posts')
+  const [activeTab, setActiveTab] = useState<'posts' | 'events' | 'members'>('posts')
+  interface JoinRequest {
+    id: number
+    group_id: number
+    user_id: number
+    status: string
+    role: string
+    created_at: string
+    user?: User
+  }
+
+  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([])
+  const [isAdmin, setIsAdmin] = useState(false)
   
   // Post creation
   const [newPost, setNewPost] = useState('')
@@ -66,6 +79,7 @@ export default function GroupDetail() {
     fetchGroup()
     fetchPosts()
     fetchEvents()
+    fetchJoinRequests()
   }, [params.id])
 
   const fetchUser = async () => {
@@ -134,6 +148,74 @@ export default function GroupDetail() {
     }
   }
 
+  const fetchJoinRequests = async () => {
+    try {
+      const response = await fetch(`http://localhost:8080/api/groups/join/requests?group_id=${params.id}`, {
+        credentials: 'include',
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setJoinRequests(data || [])
+        // If we can fetch join requests successfully, we're an admin
+        setIsAdmin(true)
+      } else if (response.status === 403 || response.status === 401) {
+        // Explicitly not an admin
+        console.log('ℹ️ Not authorized to view join requests (not an admin)')
+        setJoinRequests([])
+        setIsAdmin(false)
+      } else {
+        // Other errors - check if user is group creator
+        console.log('⚠️ Error fetching join requests, checking group ownership')
+        setJoinRequests([])
+        // Check if current user is the group creator
+        if (group && user && group.creator_id === user.id) {
+          console.log('✅ User is group creator, setting as admin')
+          setIsAdmin(true)
+        } else {
+          setIsAdmin(false)
+        }
+      }
+    } catch (err) {
+      console.log('⚠️ Failed to fetch join requests:', err)
+      setJoinRequests([])
+      // Check if current user is the group creator as fallback
+      if (group && user && group.creator_id === user.id) {
+        console.log('✅ User is group creator (fallback check), setting as admin')
+        setIsAdmin(true)
+      } else {
+        setIsAdmin(false)
+      }
+    }
+  }
+
+  const handleJoinRequest = async (userId: number, accept: boolean) => {
+    try {
+      const response = await fetch('http://localhost:8080/api/groups/join/respond', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          group_id: parseInt(params.id as string),
+          user_id: userId,
+          accept: accept,
+        }),
+        credentials: 'include',
+      })
+
+      if (response.ok) {
+        alert(accept ? 'Request accepted! ✓' : 'Request declined ✗')
+        fetchJoinRequests() // Refresh the list
+      } else {
+        const errorData = await response.json()
+        alert(`Failed: ${errorData.error || 'Unknown error'}`)
+      }
+    } catch (err) {
+      console.error('Failed to respond to join request:', err)
+      alert('Failed to respond to request')
+    }
+  }
+
   const handleCreatePost = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newPost.trim()) return
@@ -155,13 +237,15 @@ export default function GroupDetail() {
 
       if (response.ok) {
         setNewPost('')
-        fetchPosts()
+        await fetchPosts()
+        alert('Post created successfully! ✓')
       } else {
-        alert('Failed to create post')
+        const errorData = await response.json()
+        alert(`Failed to create post: ${errorData.error || 'Unknown error'}`)
       }
     } catch (err) {
       console.error('Failed to create post:', err)
-      alert('Failed to create post')
+      alert('Failed to create post. You might not be a member of this group.')
     } finally {
       setPosting(false)
     }
@@ -220,11 +304,16 @@ export default function GroupDetail() {
       })
 
       if (res.ok) {
-        alert(`You responded: ${response}`)
-        fetchEvents()
+        alert(`You responded: ${response === 'going' ? 'Going ✓' : 'Not Going ✗'}`)
+        // Refresh events to show updated response
+        await fetchEvents()
+      } else {
+        const errorData = await res.json()
+        alert(`Failed to respond: ${errorData.error || 'Unknown error'}`)
       }
     } catch (err) {
       console.error('Failed to respond to event:', err)
+      alert('Failed to respond to event')
     }
   }
 
@@ -305,6 +394,23 @@ export default function GroupDetail() {
               >
                 📅 Events
               </button>
+              {isAdmin && (
+                <button
+                  onClick={() => setActiveTab('members')}
+                  className={`py-4 px-6 text-sm font-medium ${
+                    activeTab === 'members'
+                      ? 'border-b-2 border-blue-600 text-blue-600'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  👥 Manage Members
+                  {joinRequests.length > 0 && (
+                    <span className="ml-2 bg-red-600 text-white text-xs font-bold px-2 py-1 rounded-full">
+                      {joinRequests.length}
+                    </span>
+                  )}
+                </button>
+              )}
             </nav>
           </div>
 
@@ -367,6 +473,58 @@ export default function GroupDetail() {
                           className="mt-3 w-full rounded-md"
                         />
                       )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Members Tab */}
+          {activeTab === 'members' && isAdmin && (
+            <div className="p-6">
+              <h3 className="text-lg font-semibold mb-4">Join Requests</h3>
+              
+              {joinRequests.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  No pending join requests
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {joinRequests.map((request) => (
+                    <div key={request.user_id} className="border border-gray-200 rounded-lg p-4 flex items-center justify-between">
+                      <div className="flex items-center">
+                        <div className="w-12 h-12 bg-gray-300 rounded-full flex items-center justify-center mr-3">
+                          <span className="text-lg text-gray-600">
+                            {request.user?.first_name?.[0]}{request.user?.last_name?.[0]}
+                          </span>
+                        </div>
+                        <div>
+                          <p className="font-semibold text-gray-900">
+                            {request.user?.first_name} {request.user?.last_name}
+                          </p>
+                          {request.user?.nickname && (
+                            <p className="text-sm text-gray-600">@{request.user.nickname}</p>
+                          )}
+                          <p className="text-sm text-gray-500">
+                            Requested {new Date(request.created_at).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => handleJoinRequest(request.user_id, true)}
+                          className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+                        >
+                          ✓ Accept
+                        </button>
+                        <button
+                          onClick={() => handleJoinRequest(request.user_id, false)}
+                          className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md text-sm font-medium"
+                        >
+                          ✗ Decline
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -461,15 +619,25 @@ export default function GroupDetail() {
                       <div className="flex space-x-2">
                         <button
                           onClick={() => handleEventResponse(event.id, 'going')}
-                          className="bg-green-600 hover:bg-green-700 text-white px-4 py-1 rounded-md text-sm"
+                          disabled={event.user_response === 'going'}
+                          className={`px-4 py-1 rounded-md text-sm font-medium ${
+                            event.user_response === 'going'
+                              ? 'bg-green-700 text-white cursor-default'
+                              : 'bg-green-600 hover:bg-green-700 text-white'
+                          }`}
                         >
-                          ✓ Going
+                          {event.user_response === 'going' ? '✓ Going (You)' : '✓ Going'}
                         </button>
                         <button
                           onClick={() => handleEventResponse(event.id, 'not_going')}
-                          className="bg-red-600 hover:bg-red-700 text-white px-4 py-1 rounded-md text-sm"
+                          disabled={event.user_response === 'not_going'}
+                          className={`px-4 py-1 rounded-md text-sm font-medium ${
+                            event.user_response === 'not_going'
+                              ? 'bg-red-700 text-white cursor-default'
+                              : 'bg-red-600 hover:bg-red-700 text-white'
+                          }`}
                         >
-                          ✗ Not Going
+                          {event.user_response === 'not_going' ? '✗ Not Going (You)' : '✗ Not Going'}
                         </button>
                       </div>
                     </div>

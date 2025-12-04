@@ -80,6 +80,7 @@ type GroupMember struct {
 	Status    string    `json:"status"`
 	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"created_at"`
+	User      *User     `json:"user,omitempty"`
 }
 
 // GroupPost represents a post in a group
@@ -95,13 +96,14 @@ type GroupPost struct {
 
 // GroupEvent represents an event in a group
 type GroupEvent struct {
-	ID          int       `json:"id"`
-	GroupID     int       `json:"group_id"`
-	CreatorID   int       `json:"creator_id"`
-	Title       string    `json:"title"`
-	Description *string   `json:"description,omitempty"`
-	EventTime   time.Time `json:"event_time"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID           int       `json:"id"`
+	GroupID      int       `json:"group_id"`
+	CreatorID    int       `json:"creator_id"`
+	Title        string    `json:"title"`
+	Description  *string   `json:"description,omitempty"`
+	EventTime    time.Time `json:"event_time"`
+	CreatedAt    time.Time `json:"created_at"`
+	UserResponse *string   `json:"user_response,omitempty"`
 }
 
 // EventResponse represents a user's response to an event
@@ -616,19 +618,93 @@ func (r *Repository) GetAllGroups() ([]*Group, error) {
 }
 
 func (r *Repository) InviteToGroup(groupID, userID, inviterID int) error {
-	// Check if inviter is admin
-	var role string
+	// Check if inviter is a member (admin or regular member)
+	var count int
 	err := r.db.QueryRow(
-		"SELECT role FROM group_members WHERE group_id = ? AND user_id = ? AND status = 'accepted'",
+		"SELECT COUNT(*) FROM group_members WHERE group_id = ? AND user_id = ? AND status = 'accepted'",
 		groupID, inviterID,
-	).Scan(&role)
-	if err != nil || role != "admin" {
-		return errors.New("only admins can invite users")
+	).Scan(&count)
+	if err != nil || count == 0 {
+		return errors.New("only group members can invite users")
 	}
 
 	_, err = r.db.Exec(
 		"INSERT INTO group_members (group_id, user_id, status, role) VALUES (?, ?, 'pending', 'member')",
 		groupID, userID,
+	)
+	return err
+}
+
+func (r *Repository) RequestToJoinGroup(groupID, userID int) error {
+	// Check if user is already a member or has pending request
+	var count int
+	err := r.db.QueryRow(
+		"SELECT COUNT(*) FROM group_members WHERE group_id = ? AND user_id = ?",
+		groupID, userID,
+	).Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return errors.New("user already has a relationship with this group")
+	}
+
+	_, err = r.db.Exec(
+		"INSERT INTO group_members (group_id, user_id, status, role) VALUES (?, ?, 'pending', 'member')",
+		groupID, userID,
+	)
+	return err
+}
+
+func (r *Repository) GetGroupJoinRequests(groupID int) ([]*GroupMember, error) {
+	rows, err := r.db.Query(
+		`SELECT gm.id, gm.group_id, gm.user_id, gm.status, gm.role, gm.created_at,
+		u.id, u.email, u.first_name, u.last_name, u.avatar_path, u.nickname
+		FROM group_members gm
+		JOIN users u ON gm.user_id = u.id
+		WHERE gm.group_id = ? AND gm.status = 'pending'`,
+		groupID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var requests []*GroupMember
+	for rows.Next() {
+		member := &GroupMember{}
+		user := &User{}
+		if err := rows.Scan(
+			&member.ID, &member.GroupID, &member.UserID, &member.Status, &member.Role, &member.CreatedAt,
+			&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.AvatarPath, &user.Nickname,
+		); err != nil {
+			return nil, err
+		}
+		member.User = user
+		requests = append(requests, member)
+	}
+	return requests, nil
+}
+
+func (r *Repository) RespondToJoinRequest(groupID, userID, adminID int, accept bool) error {
+	// Check if responder is admin
+	var role string
+	err := r.db.QueryRow(
+		"SELECT role FROM group_members WHERE group_id = ? AND user_id = ? AND status = 'accepted'",
+		groupID, adminID,
+	).Scan(&role)
+	if err != nil || role != "admin" {
+		return errors.New("only admins can respond to join requests")
+	}
+
+	status := "rejected"
+	if accept {
+		status = "accepted"
+	}
+
+	_, err = r.db.Exec(
+		"UPDATE group_members SET status = ? WHERE group_id = ? AND user_id = ?",
+		status, groupID, userID,
 	)
 	return err
 }
@@ -757,6 +833,60 @@ func (r *Repository) GetGroupEvents(groupID int) ([]*GroupEvent, error) {
 		events = append(events, event)
 	}
 	return events, nil
+}
+
+func (r *Repository) GetGroupEventsWithUserResponse(groupID, userID int) ([]*GroupEvent, error) {
+	rows, err := r.db.Query(
+		`SELECT ge.id, ge.group_id, ge.creator_id, ge.title, ge.description, ge.event_time, ge.created_at,
+		er.response
+		FROM group_events ge
+		LEFT JOIN event_responses er ON ge.id = er.event_id AND er.user_id = ?
+		WHERE ge.group_id = ?
+		ORDER BY ge.event_time ASC`,
+		userID, groupID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []*GroupEvent
+	for rows.Next() {
+		event := &GroupEvent{}
+		var userResponse sql.NullString
+		if err := rows.Scan(
+			&event.ID, &event.GroupID, &event.CreatorID, &event.Title, &event.Description, &event.EventTime, &event.CreatedAt,
+			&userResponse,
+		); err != nil {
+			return nil, err
+		}
+		if userResponse.Valid {
+			event.UserResponse = &userResponse.String
+		}
+		events = append(events, event)
+	}
+	return events, nil
+}
+
+func (r *Repository) GetEventResponses(eventID int) ([]*EventResponse, error) {
+	rows, err := r.db.Query(
+		"SELECT id, event_id, user_id, response, created_at FROM event_responses WHERE event_id = ?",
+		eventID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var responses []*EventResponse
+	for rows.Next() {
+		response := &EventResponse{}
+		if err := rows.Scan(&response.ID, &response.EventID, &response.UserID, &response.Response, &response.CreatedAt); err != nil {
+			return nil, err
+		}
+		responses = append(responses, response)
+	}
+	return responses, nil
 }
 
 func (r *Repository) RespondToEvent(eventID, userID int, response string) error {

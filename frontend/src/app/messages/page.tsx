@@ -33,9 +33,16 @@ export default function Messages() {
   const [newMessage, setNewMessage] = useState('')
   const [loading, setLoading] = useState(true)
   const [ws, setWs] = useState<WebSocket | null>(null)
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const selectedUserRef = useRef<User | null>(null)
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const reconnectAttemptsRef = useRef(0)
+  const messageQueueRef = useRef<any[]>([])
+  const hasConnectedRef = useRef(false)
+  const isConnectingRef = useRef(false)
+  const MAX_RECONNECT_ATTEMPTS = 10
 
   // Keep refs updated
   useEffect(() => {
@@ -50,14 +57,21 @@ export default function Messages() {
     fetchCurrentUser()
     
     return () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current)
+      }
       if (wsRef.current) {
         wsRef.current.close()
+        wsRef.current = null
       }
+      hasConnectedRef.current = false
     }
   }, [])
 
   useEffect(() => {
-    if (currentUser) {
+    // Only connect once when currentUser is available
+    if (currentUser && !hasConnectedRef.current) {
+      hasConnectedRef.current = true
       connectWebSocket()
     }
   }, [currentUser])
@@ -85,11 +99,61 @@ export default function Messages() {
   const connectWebSocket = () => {
     if (!currentUser) return
     
+    // Prevent multiple simultaneous connection attempts
+    if (isConnectingRef.current) {
+      console.log('⏳ Connection attempt already in progress')
+      return
+    }
+    
+    // Don't create a new connection if one already exists and is open
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      console.log('✅ WebSocket already connected')
+      return
+    }
+    
+    // Check reconnection attempts
+    if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+      console.error('❌ Max reconnection attempts reached. Please refresh the page.')
+      return
+    }
+    
+    // Close existing connection if it's in a bad state
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
+    }
+    
+    // Clear any existing reconnect timeout
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current)
+    }
+    
+    isConnectingRef.current = true
+    setConnectionStatus('connecting')
+    console.log(`🔄 Connecting to WebSocket... (Attempt ${reconnectAttemptsRef.current + 1})`)
+    
     const websocket = new WebSocket('ws://localhost:8080/ws')
     
     websocket.onopen = () => {
-      console.log('✅ Connected')
+      console.log('✅ WebSocket Connected')
+      setConnectionStatus('connected')
+      reconnectAttemptsRef.current = 0 // Reset counter on successful connection
+      isConnectingRef.current = false
+      
+      // Send any queued messages
+      if (messageQueueRef.current.length > 0) {
+        console.log(`📤 Sending ${messageQueueRef.current.length} queued messages`)
+        messageQueueRef.current.forEach(msg => {
+          websocket.send(JSON.stringify(msg))
+        })
+        messageQueueRef.current = []
+      }
     }
+
+    // Handle ping from server - browser automatically responds with pong
+    websocket.addEventListener('ping', () => {
+      console.log('🏓 Received ping from server')
+    })
     
     websocket.onmessage = (event) => {
       // Handle multiple messages in one frame (separated by newlines)
@@ -103,38 +167,58 @@ export default function Messages() {
           console.log('📥 Messages page received:', data)
 
           if (data.type === 'private') {
+            // Only process messages from OTHER users (not from ourselves)
+            // Our own messages are handled optimistically
+            if (data.sender_id === currentUser.id) {
+              console.log('⏭️ Skipping own message (handled optimistically)')
+              return
+            }
+
             const newMsg: Message = {
-              id: Date.now(),
+              id: Date.now() + Math.random(),
               sender_id: data.sender_id,
               receiver_id: data.receiver_id,
               content: data.content,
               created_at: data.timestamp || new Date().toISOString(),
             }
 
-            // Only add message if it's relevant to current conversation
-            if (selectedUserRef.current) {
-              const isRelevant =
-                (newMsg.sender_id === selectedUserRef.current.id && newMsg.receiver_id === currentUser.id) ||
-                (newMsg.sender_id === currentUser.id && newMsg.receiver_id === selectedUserRef.current.id)
+            console.log('📨 Processing message from user:', newMsg.sender_id, 'to:', newMsg.receiver_id)
+            console.log('📋 Current selected user:', selectedUserRef.current?.id)
 
-              if (isRelevant) {
-                setMessages(prev => [...prev, newMsg])
-              }
-            }
-
-            // Add sender to conversations if new and it's not from current user
-            if (newMsg.sender_id !== currentUser.id) {
-              setConversations(prev => {
-                if (!prev.some(u => u.id === newMsg.sender_id)) {
-                  fetchUserById(newMsg.sender_id).then(user => {
-                    if (user) {
-                      setConversations(p => [user, ...p])
-                    }
-                  })
+            // Add message if it's relevant to current conversation
+            // Check if we're in a conversation with the sender
+            if (selectedUserRef.current && selectedUserRef.current.id === newMsg.sender_id) {
+              console.log('✅ Message is for current conversation, adding...')
+              setMessages(prev => {
+                // Check for duplicates in last 10 messages
+                const recentMessages = prev.slice(-10)
+                const isDuplicate = recentMessages.some(m => 
+                  m.content === newMsg.content && 
+                  m.sender_id === newMsg.sender_id &&
+                  Math.abs(new Date(m.created_at).getTime() - new Date(newMsg.created_at).getTime()) < 3000
+                )
+                if (isDuplicate) {
+                  console.log('⚠️ Duplicate message detected, skipping')
+                  return prev
                 }
-                return prev
+                console.log('✅ Adding new message from other user')
+                return [...prev, newMsg]
               })
+            } else {
+              console.log('ℹ️ Message not for current conversation, skipping UI update')
             }
+
+            // Add sender to conversations if new
+            setConversations(prev => {
+              if (!prev.some(u => u.id === newMsg.sender_id)) {
+                fetchUserById(newMsg.sender_id).then(user => {
+                  if (user) {
+                    setConversations(p => [user, ...p])
+                  }
+                })
+              }
+              return prev
+            })
           }
         } catch (error) {
           console.error('Failed to parse WebSocket message:', messageStr, error)
@@ -142,16 +226,29 @@ export default function Messages() {
       })
     }
     
-    websocket.onerror = (error) => {
-      console.error('WebSocket error:', error)
-    }
+      websocket.onerror = (error) => {
+        console.log('⚠️ WebSocket connection error (this is normal during reconnection):', error)
+        setConnectionStatus('disconnected')
+        isConnectingRef.current = false
+      }
     
-    websocket.onclose = () => {
-      setTimeout(() => {
-        if (currentUser) {
+    websocket.onclose = (event) => {
+      console.log(`🔌 WebSocket closed: ${event.code} - ${event.reason || 'No reason provided'}`)
+      setConnectionStatus('disconnected')
+      isConnectingRef.current = false
+      wsRef.current = null
+      setWs(null)
+      
+      // Attempt to reconnect with exponential backoff
+      if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS && currentUser) {
+        reconnectAttemptsRef.current++
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 30000)
+        console.log(`⏳ Reconnecting in ${delay / 1000} seconds...`)
+        
+        reconnectTimeoutRef.current = setTimeout(() => {
           connectWebSocket()
-        }
-      }, 3000)
+        }, delay)
+      }
     }
     
     setWs(websocket)
@@ -236,21 +333,49 @@ export default function Messages() {
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
     
-    if (!newMessage.trim() || !selectedUser || !ws || ws.readyState !== WebSocket.OPEN) {
+    if (!newMessage.trim() || !selectedUser || !currentUser) {
       return
     }
 
+    const messageContent = newMessage.trim()
     const messageData = {
       type: 'private',
       receiver_id: selectedUser.id,
-      content: newMessage,
+      content: messageContent,
     }
 
-    try {
-      ws.send(JSON.stringify(messageData))
-      setNewMessage('')
-    } catch (error) {
-      console.error('Failed to send')
+    // Optimistic UI update - add message immediately
+    const optimisticMessage: Message = {
+      id: Date.now() + Math.random(),
+      sender_id: currentUser.id,
+      receiver_id: selectedUser.id,
+      content: messageContent,
+      created_at: new Date().toISOString(),
+    }
+
+    setMessages(prev => [...prev, optimisticMessage])
+    setNewMessage('')
+    console.log('✅ Message added optimistically')
+
+    // If WebSocket is connected, send immediately
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify(messageData))
+        console.log('📤 Message sent via WebSocket')
+      } catch (error) {
+        console.error('❌ Failed to send message:', error)
+        // Queue message for retry
+        messageQueueRef.current.push(messageData)
+      }
+    } else {
+      // Queue message if not connected
+      console.log('⏳ WebSocket not connected, queueing message')
+      messageQueueRef.current.push(messageData)
+      
+      // Try to reconnect
+      if (!ws || ws.readyState === WebSocket.CLOSED) {
+        connectWebSocket()
+      }
     }
   }
 
@@ -274,7 +399,30 @@ export default function Messages() {
             >
               ← Back
             </button>
-            <h1 className="text-xl font-semibold">{currentUser?.first_name}</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-semibold">{currentUser?.first_name}</h1>
+              {/* Connection Status Indicator */}
+              <div className="flex items-center gap-2">
+                {connectionStatus === 'connected' && (
+                  <div className="flex items-center gap-1">
+                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                    <span className="text-xs text-green-600">Connected</span>
+                  </div>
+                )}
+                {connectionStatus === 'connecting' && (
+                  <div className="flex items-center gap-1">
+                    <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                    <span className="text-xs text-yellow-600">Connecting...</span>
+                  </div>
+                )}
+                {connectionStatus === 'disconnected' && (
+                  <div className="flex items-center gap-1">
+                    <div className="w-2 h-2 bg-red-500 rounded-full"></div>
+                    <span className="text-xs text-red-600">Disconnected</span>
+                  </div>
+                )}
+              </div>
+            </div>
             <div className="w-20"></div>
           </div>
         </div>

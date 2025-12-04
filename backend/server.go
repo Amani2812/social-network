@@ -95,6 +95,9 @@ func main() {
 	http.HandleFunc("/api/groups/all", enableCORS(handler.GetAllGroups))
 	http.HandleFunc("/api/groups/invite", enableCORS(handler.InviteToGroup))
 	http.HandleFunc("/api/groups/respond", enableCORS(handler.RespondToGroupInvite))
+	http.HandleFunc("/api/groups/join/request", enableCORS(handler.RequestToJoinGroup))
+	http.HandleFunc("/api/groups/join/requests", enableCORS(handler.GetGroupJoinRequests))
+	http.HandleFunc("/api/groups/join/respond", enableCORS(handler.RespondToJoinRequest))
 	http.HandleFunc("/api/groups/posts/create", enableCORS(handler.CreateGroupPost))
 	http.HandleFunc("/api/groups/posts/get", enableCORS(handler.GetGroupPosts))
 

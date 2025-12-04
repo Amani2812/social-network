@@ -1,37 +1,50 @@
-# Implementation TODO List
+# WebSocket Error Fix - TODO
 
-## Feature 1: Message Notifications for Offline Users
-- [x] Modify `backend/pkg/websocket/websocket.go` - Add notification creation when user is offline
-- [x] Update `frontend/src/app/notifications/page.tsx` - Add message notification type handling
+## Current Status: In Progress
 
-## Feature 2: Group Discovery (All Groups Visible)
-- [x] Add `GetAllGroups` method in `backend/pkg/models/models.go`
-- [x] Add `GetAllGroups` handler in `backend/pkg/handlers/handlers.go`
-- [x] Add route in `backend/server.go` for `/api/groups/all`
-- [x] Update `frontend/src/app/groups/page.tsx` - Add "Discover Groups" section
+### Completed Steps:
+- [x] Analyzed WebSocket error in dashboard
+- [x] Reviewed all WebSocket implementations
+- [x] Created comprehensive fix plan
+- [x] Fixed dashboard WebSocket connection
+- [x] Fixed notifications page WebSocket connection
+- [x] Fixed messages page WebSocket connection
+- [x] Fixed profile page WebSocket connection
 
-## Bug Fixes
-- [x] Fixed JSON parsing error in messages page WebSocket handler
+### Pending:
+- [ ] Test all WebSocket connections
+- [ ] Verify reconnection logic
+- [ ] Check for memory leaks
 
-## Testing
-- [ ] Test message notifications when recipient is offline
-- [ ] Test group discovery and visibility
-- [ ] Verify notification navigation works correctly
+## Implementation Details
 
-## Summary of Changes
+### 1. Dashboard Page (frontend/src/app/dashboard/page.tsx)
+**Changes:**
+- Add reconnection attempt counter with max limit
+- Add exponential backoff for reconnections
+- Prevent multiple simultaneous connections
+- Improve error logging
+- Add proper cleanup
 
-### Backend Changes:
-1. **websocket.go**: Modified `sendToUser` function to create a notification when the recipient is offline
-2. **models.go**: Added `GetAllGroups()` method to fetch all groups from the database
-3. **handlers.go**: Added `GetAllGroups()` handler to expose the endpoint
-4. **server.go**: Added route `/api/groups/all` for fetching all groups
+### 2. Messages Page (frontend/src/app/messages/page.tsx)
+**Changes:**
+- Ensure consistency with dashboard implementation
+- Add better error handling
+- Verify cleanup logic
 
-### Frontend Changes:
-1. **notifications/page.tsx**: 
-   - Added 'message' case in `getNotificationIcon()` with 💬 icon
-   - Added navigation to messages page when clicking message notifications
-2. **groups/page.tsx**:
-   - Added `allGroups` state to store all available groups
-   - Added `fetchAllGroups()` function to fetch all groups
-   - Added "Discover Groups" section showing all groups with member badges
-   - Groups show "Member" badge if user is already a member
+### 3. Notifications Page (frontend/src/app/notifications/page.tsx)
+**Changes:**
+- Add reconnection attempt limiting
+- Improve error handling
+- Add connection state management
+
+### 4. Profile Page (frontend/src/app/profile/[id]/page.tsx)
+**Changes:**
+- Add reconnection attempt limiting
+- Improve error handling
+- Add proper cleanup
+
+### 5. Backend WebSocket Handler (backend/pkg/websocket/websocket.go)
+**Changes:**
+- Add more detailed error logging
+- Improve connection handling
