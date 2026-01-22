@@ -39,7 +39,6 @@ export default function Notifications() {
     fetchUser()
     fetchNotifications()
     fetchUnreadCount()
-    connectWebSocket()
 
     return () => {
       // Cleanup on unmount
@@ -53,7 +52,20 @@ export default function Notifications() {
     }
   }, [])
 
+  useEffect(() => {
+    // Only connect WebSocket after user is authenticated
+    if (user) {
+      connectWebSocket()
+    }
+  }, [user])
+
   const connectWebSocket = () => {
+    // Only connect if user is authenticated
+    if (!user) {
+      console.log('⏸️ WebSocket connection skipped - user not authenticated')
+      return
+    }
+
     // Prevent multiple simultaneous connection attempts
     if (isConnectingRef.current) {
       console.log('⏳ Connection attempt already in progress')
@@ -79,7 +91,7 @@ export default function Notifications() {
       const websocket = new WebSocket('ws://localhost:8080/ws')
 
       websocket.onopen = () => {
-        console.log('✅ Notifications WebSocket connected')
+        console.log('✅ Notifications WebSocket connected successfully')
         reconnectAttemptsRef.current = 0 // Reset counter on successful connection
         isConnectingRef.current = false
       }
@@ -107,25 +119,36 @@ export default function Notifications() {
       }
 
       websocket.onerror = (error) => {
-        console.log('⚠️ WebSocket connection error (this is normal during reconnection):', error)
+        console.error('❌ WebSocket connection error:', error)
+        console.log('💡 This may be due to authentication issues or server unavailability')
         isConnectingRef.current = false
       }
 
       websocket.onclose = (event) => {
-        console.log(`🔌 WebSocket closed: ${event.code} - ${event.reason || 'No reason provided'}`)
+        console.log(`🔌 WebSocket closed: Code ${event.code} - ${event.reason || 'No reason provided'}`)
+        
+        // Check if it's an authentication error (code 1006 or 1008)
+        if (event.code === 1006 || event.code === 1008) {
+          console.warn('⚠️ WebSocket closed due to possible authentication issue')
+          console.log('💡 Make sure you are logged in and have a valid session')
+        }
+        
         isConnectingRef.current = false
         wsRef.current = null
         setWs(null)
 
-        // Attempt to reconnect with exponential backoff
-        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+        // Only attempt to reconnect if user is still authenticated and we haven't exceeded max attempts
+        if (user && reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
           reconnectAttemptsRef.current++
           const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 30000)
-          console.log(`⏳ Reconnecting in ${delay / 1000} seconds...`)
+          console.log(`⏳ Reconnecting in ${delay / 1000} seconds... (Attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`)
 
           reconnectTimeoutRef.current = setTimeout(() => {
             connectWebSocket()
           }, delay)
+        } else if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+          console.error('❌ Max reconnection attempts reached. WebSocket will not reconnect automatically.')
+          console.log('💡 Please refresh the page to retry the connection')
         }
       }
 

@@ -84,6 +84,10 @@ func main() {
 	// Comment routes
 	http.HandleFunc("/api/comments", enableCORS(handler.CreateComment))
 	http.HandleFunc("/api/comments/get", enableCORS(handler.GetComments))
+	http.HandleFunc("/api/comments/react", enableCORS(handler.ReactToComment))
+
+	// Post reaction routes
+	http.HandleFunc("/api/posts/react", enableCORS(handler.ReactToPost))
 
 	// Upload route
 	http.HandleFunc("/api/upload", enableCORS(handler.UploadImage))

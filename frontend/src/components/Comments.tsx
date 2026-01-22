@@ -19,6 +19,9 @@ interface Comment {
   image_path?: string
   created_at: string
   user?: User
+  likes?: number
+  dislikes?: number
+  user_reaction?: 'like' | 'dislike' | null
 }
 
 interface CommentsProps {
@@ -34,6 +37,29 @@ export default function Comments({ postId, currentUserId }: CommentsProps) {
   const [selectedImage, setSelectedImage] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  const handleReaction = async (commentId: number, reaction: 'like' | 'dislike') => {
+    try {
+      const response = await fetch('http://localhost:8080/api/comments/react', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          comment_id: commentId,
+          reaction: reaction,
+        }),
+        credentials: 'include',
+      })
+
+      if (response.ok) {
+        // Refresh comments to get updated counts
+        fetchComments()
+      }
+    } catch (err) {
+      console.error('Failed to react to comment:', err)
+    }
+  }
 
   useEffect(() => {
     if (showComments) {
@@ -252,6 +278,32 @@ export default function Comments({ postId, currentUserId }: CommentsProps) {
                           className="mt-2 w-full max-h-48 object-cover rounded-md" 
                         />
                       )}
+                      
+                      {/* Like/Dislike Buttons */}
+                      <div className="flex items-center gap-4 mt-2">
+                        <button
+                          onClick={() => handleReaction(comment.id, 'like')}
+                          className={`flex items-center gap-1 text-sm ${
+                            comment.user_reaction === 'like' 
+                              ? 'text-blue-600 font-semibold' 
+                              : 'text-gray-600 hover:text-blue-600'
+                          } transition`}
+                        >
+                          <span className="text-lg">👍</span>
+                          <span>{comment.likes || 0}</span>
+                        </button>
+                        <button
+                          onClick={() => handleReaction(comment.id, 'dislike')}
+                          className={`flex items-center gap-1 text-sm ${
+                            comment.user_reaction === 'dislike' 
+                              ? 'text-red-600 font-semibold' 
+                              : 'text-gray-600 hover:text-red-600'
+                          } transition`}
+                        >
+                          <span className="text-lg">👎</span>
+                          <span>{comment.dislikes || 0}</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -618,7 +618,32 @@ func (h *Handler) GetFeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusOK, posts)
+	// Enrich posts with reaction data
+	enrichedPosts := make([]map[string]interface{}, 0, len(posts))
+	for _, post := range posts {
+		// Get reaction counts
+		likes, dislikes, _ := h.repo.GetPostReactionCounts(post.ID)
+		
+		// Get user's reaction
+		userReaction, _ := h.repo.GetUserPostReaction(post.ID, user.ID)
+		
+		// Create enriched post object
+		enrichedPost := map[string]interface{}{
+			"id":            post.ID,
+			"user_id":       post.UserID,
+			"content":       post.Content,
+			"image_path":    post.ImagePath,
+			"privacy":       post.Privacy,
+			"created_at":    post.CreatedAt,
+			"user":          post.User,
+			"likes":         likes,
+			"dislikes":      dislikes,
+			"user_reaction": userReaction,
+		}
+		enrichedPosts = append(enrichedPosts, enrichedPost)
+	}
+
+	respondJSON(w, http.StatusOK, enrichedPosts)
 }
 
 func (h *Handler) UpdatePost(w http.ResponseWriter, r *http.Request) {
@@ -1455,4 +1480,109 @@ func (h *Handler) GetUnreadCount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]int{"count": count})
+}
+
+// Reaction handlers
+func (h *Handler) ReactToPost(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	user, err := h.getUserFromSession(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	var req struct {
+		PostID   int    `json:"post_id"`
+		Reaction string `json:"reaction"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Validate reaction
+	if req.Reaction != "like" && req.Reaction != "dislike" {
+		respondError(w, http.StatusBadRequest, "Invalid reaction. Must be 'like' or 'dislike'")
+		return
+	}
+
+	// Toggle reaction
+	if err := h.repo.TogglePostReaction(req.PostID, user.ID, req.Reaction); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to react to post")
+		return
+	}
+
+	// Get updated counts
+	likes, dislikes, err := h.repo.GetPostReactionCounts(req.PostID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get reaction counts")
+		return
+	}
+
+	// Get user's current reaction
+	userReaction, _ := h.repo.GetUserPostReaction(req.PostID, user.ID)
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success":       true,
+		"likes":         likes,
+		"dislikes":      dislikes,
+		"user_reaction": userReaction,
+	})
+}
+
+func (h *Handler) ReactToComment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	user, err := h.getUserFromSession(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	var req struct {
+		CommentID int    `json:"comment_id"`
+		Reaction  string `json:"reaction"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Validate reaction
+	if req.Reaction != "like" && req.Reaction != "dislike" {
+		respondError(w, http.StatusBadRequest, "Invalid reaction. Must be 'like' or 'dislike'")
+		return
+	}
+
+	// Toggle reaction
+	if err := h.repo.ToggleCommentReaction(req.CommentID, user.ID, req.Reaction); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to react to comment")
+		return
+	}
+
+	// Get updated counts
+	likes, dislikes, err := h.repo.GetCommentReactionCounts(req.CommentID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get reaction counts")
+		return
+	}
+
+	// Get user's current reaction
+	userReaction, _ := h.repo.GetUserCommentReaction(req.CommentID, user.ID)
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"success":       true,
+		"likes":         likes,
+		"dislikes":      dislikes,
+		"user_reaction": userReaction,
+	})
 }

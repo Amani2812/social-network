@@ -186,6 +186,41 @@ func (d *Database) RunMigrations() error {
 		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 	);
 
+	-- Post reactions table
+	CREATE TABLE IF NOT EXISTS post_reactions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		post_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL,
+		reaction TEXT NOT NULL CHECK(reaction IN ('like', 'dislike')),
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		UNIQUE(post_id, user_id)
+	);
+
+	-- Comment reactions table
+	CREATE TABLE IF NOT EXISTS comment_reactions (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		comment_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL,
+		reaction TEXT NOT NULL CHECK(reaction IN ('like', 'dislike')),
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (comment_id) REFERENCES comments(id) ON DELETE CASCADE,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		UNIQUE(comment_id, user_id)
+	);
+
+	-- Post allowed users table (for custom privacy)
+	CREATE TABLE IF NOT EXISTS post_allowed_users (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		post_id INTEGER NOT NULL,
+		user_id INTEGER NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+		UNIQUE(post_id, user_id)
+	);
+
 	-- Create indexes for better performance
 	CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 	CREATE INDEX IF NOT EXISTS idx_follows_follower ON follows(follower_id);
@@ -198,6 +233,12 @@ func (d *Database) RunMigrations() error {
 	CREATE INDEX IF NOT EXISTS idx_messages_receiver ON messages(receiver_id);
 	CREATE INDEX IF NOT EXISTS idx_messages_group ON messages(group_id);
 	CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
+	CREATE INDEX IF NOT EXISTS idx_post_reactions_post ON post_reactions(post_id);
+	CREATE INDEX IF NOT EXISTS idx_post_reactions_user ON post_reactions(user_id);
+	CREATE INDEX IF NOT EXISTS idx_comment_reactions_comment ON comment_reactions(comment_id);
+	CREATE INDEX IF NOT EXISTS idx_comment_reactions_user ON comment_reactions(user_id);
+	CREATE INDEX IF NOT EXISTS idx_post_allowed_users_post ON post_allowed_users(post_id);
+	CREATE INDEX IF NOT EXISTS idx_post_allowed_users_user ON post_allowed_users(user_id);
 	`
 
 	_, err := d.DB.Exec(schema)

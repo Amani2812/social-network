@@ -21,6 +21,9 @@ interface Post {
   privacy: string
   created_at: string
   user?: User
+  likes?: number
+  dislikes?: number
+  user_reaction?: 'like' | 'dislike' | null
 }
 
 export default function Dashboard() {
@@ -70,7 +73,11 @@ export default function Dashboard() {
   }, [user])
 
   const connectWebSocket = () => {
-    if (!user) return
+    // Only connect if user is authenticated
+    if (!user) {
+      console.log('⏸️ WebSocket connection skipped - user not authenticated')
+      return
+    }
     
     // Prevent multiple simultaneous connection attempts
     if (isConnectingRef.current) {
@@ -97,7 +104,7 @@ export default function Dashboard() {
       const websocket = new WebSocket('ws://localhost:8080/ws')
       
       websocket.onopen = () => {
-        console.log('✅ Dashboard WebSocket connected')
+        console.log('✅ Dashboard WebSocket connected successfully')
         reconnectAttemptsRef.current = 0 // Reset counter on successful connection
         isConnectingRef.current = false
       }
@@ -145,25 +152,36 @@ export default function Dashboard() {
       }
       
       websocket.onerror = (error) => {
-        console.log('⚠️ WebSocket connection error (this is normal during reconnection):', error)
+        console.error('❌ WebSocket connection error:', error)
+        console.log('💡 This may be due to authentication issues or server unavailability')
         isConnectingRef.current = false
       }
       
       websocket.onclose = (event) => {
-        console.log(`🔌 WebSocket closed: ${event.code} - ${event.reason || 'No reason provided'}`)
+        console.log(`🔌 WebSocket closed: Code ${event.code} - ${event.reason || 'No reason provided'}`)
+        
+        // Check if it's an authentication error (code 1006 or 1008)
+        if (event.code === 1006 || event.code === 1008) {
+          console.warn('⚠️ WebSocket closed due to possible authentication issue')
+          console.log('💡 Make sure you are logged in and have a valid session')
+        }
+        
         isConnectingRef.current = false
         wsRef.current = null
         setWs(null)
         
-        // Attempt to reconnect with exponential backoff
+        // Only attempt to reconnect if user is still authenticated and we haven't exceeded max attempts
         if (user && reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
           reconnectAttemptsRef.current++
           const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current - 1), 30000)
-          console.log(`⏳ Reconnecting in ${delay / 1000} seconds...`)
+          console.log(`⏳ Reconnecting in ${delay / 1000} seconds... (Attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`)
           
           reconnectTimeoutRef.current = setTimeout(() => {
             connectWebSocket()
           }, delay)
+        } else if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+          console.error('❌ Max reconnection attempts reached. WebSocket will not reconnect automatically.')
+          console.log('💡 Please refresh the page to retry the connection')
         }
       }
       
@@ -314,6 +332,29 @@ export default function Dashboard() {
       console.error('Failed to create post:', err)
     } finally {
       setUploading(false)
+    }
+  }
+
+  const handlePostReaction = async (postId: number, reaction: 'like' | 'dislike') => {
+    try {
+      const response = await fetch('http://localhost:8080/api/posts/react', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          post_id: postId,
+          reaction: reaction,
+        }),
+        credentials: 'include',
+      })
+
+      if (response.ok) {
+        // Refresh feed to get updated counts
+        fetchFeed()
+      }
+    } catch (err) {
+      console.error('Failed to react to post:', err)
     }
   }
 
@@ -508,7 +549,7 @@ export default function Dashboard() {
                     {post.image_path && (
                       <img src={`http://localhost:8080${post.image_path}`} alt="Post image" className="w-full rounded-md mb-4" />
                     )}
-                    <div className="flex items-center text-sm text-gray-500 mb-2">
+                    <div className="flex items-center justify-between text-sm text-gray-500 mb-2">
                       <span className={`px-2 py-1 rounded-full text-xs ${
                         post.privacy === 'public' ? 'bg-green-100 text-green-800' :
                         post.privacy === 'almost_private' ? 'bg-yellow-100 text-yellow-800' :
@@ -517,6 +558,32 @@ export default function Dashboard() {
                         {post.privacy === 'public' ? 'Public' :
                          post.privacy === 'almost_private' ? 'Followers Only' : 'Private'}
                       </span>
+                      
+                      {/* Post Like/Dislike Buttons */}
+                      <div className="flex items-center gap-4">
+                        <button
+                          onClick={() => handlePostReaction(post.id, 'like')}
+                          className={`flex items-center gap-1 ${
+                            post.user_reaction === 'like' 
+                              ? 'text-blue-600 font-semibold' 
+                              : 'text-gray-600 hover:text-blue-600'
+                          } transition`}
+                        >
+                          <span className="text-xl">👍</span>
+                          <span>{post.likes || 0}</span>
+                        </button>
+                        <button
+                          onClick={() => handlePostReaction(post.id, 'dislike')}
+                          className={`flex items-center gap-1 ${
+                            post.user_reaction === 'dislike' 
+                              ? 'text-red-600 font-semibold' 
+                              : 'text-gray-600 hover:text-red-600'
+                          } transition`}
+                        >
+                          <span className="text-xl">👎</span>
+                          <span>{post.dislikes || 0}</span>
+                        </button>
+                      </div>
                     </div>
                     
                     {/* Comments Component */}

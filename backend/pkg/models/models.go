@@ -139,6 +139,24 @@ type Notification struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// PostReaction represents a like/dislike on a post
+type PostReaction struct {
+	ID        int       `json:"id"`
+	PostID    int       `json:"post_id"`
+	UserID    int       `json:"user_id"`
+	Reaction  string    `json:"reaction"` // "like" or "dislike"
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// CommentReaction represents a like/dislike on a comment
+type CommentReaction struct {
+	ID        int       `json:"id"`
+	CommentID int       `json:"comment_id"`
+	UserID    int       `json:"user_id"`
+	Reaction  string    `json:"reaction"` // "like" or "dislike"
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // Repository contains all data access methods
 type Repository struct {
 	db *sql.DB
@@ -1101,4 +1119,152 @@ func (r *Repository) GetUnreadNotificationCount(userID int) (int, error) {
 		userID,
 	).Scan(&count)
 	return count, err
+}
+
+// Post Reaction methods
+func (r *Repository) TogglePostReaction(postID, userID int, reaction string) error {
+	// Check if user already has a reaction
+	var existingReaction string
+	err := r.db.QueryRow(
+		"SELECT reaction FROM post_reactions WHERE post_id = ? AND user_id = ?",
+		postID, userID,
+	).Scan(&existingReaction)
+
+	if err == sql.ErrNoRows {
+		// No existing reaction, create new one
+		_, err = r.db.Exec(
+			"INSERT INTO post_reactions (post_id, user_id, reaction) VALUES (?, ?, ?)",
+			postID, userID, reaction,
+		)
+		return err
+	} else if err != nil {
+		return err
+	}
+
+	// Existing reaction found
+	if existingReaction == reaction {
+		// Same reaction, remove it (toggle off)
+		_, err = r.db.Exec(
+			"DELETE FROM post_reactions WHERE post_id = ? AND user_id = ?",
+			postID, userID,
+		)
+		return err
+	} else {
+		// Different reaction, update it
+		_, err = r.db.Exec(
+			"UPDATE post_reactions SET reaction = ? WHERE post_id = ? AND user_id = ?",
+			reaction, postID, userID,
+		)
+		return err
+	}
+}
+
+func (r *Repository) GetPostReactionCounts(postID int) (likes int, dislikes int, err error) {
+	err = r.db.QueryRow(
+		"SELECT COUNT(*) FROM post_reactions WHERE post_id = ? AND reaction = 'like'",
+		postID,
+	).Scan(&likes)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	err = r.db.QueryRow(
+		"SELECT COUNT(*) FROM post_reactions WHERE post_id = ? AND reaction = 'dislike'",
+		postID,
+	).Scan(&dislikes)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return likes, dislikes, nil
+}
+
+func (r *Repository) GetUserPostReaction(postID, userID int) (*string, error) {
+	var reaction string
+	err := r.db.QueryRow(
+		"SELECT reaction FROM post_reactions WHERE post_id = ? AND user_id = ?",
+		postID, userID,
+	).Scan(&reaction)
+	
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &reaction, nil
+}
+
+// Comment Reaction methods
+func (r *Repository) ToggleCommentReaction(commentID, userID int, reaction string) error {
+	// Check if user already has a reaction
+	var existingReaction string
+	err := r.db.QueryRow(
+		"SELECT reaction FROM comment_reactions WHERE comment_id = ? AND user_id = ?",
+		commentID, userID,
+	).Scan(&existingReaction)
+
+	if err == sql.ErrNoRows {
+		// No existing reaction, create new one
+		_, err = r.db.Exec(
+			"INSERT INTO comment_reactions (comment_id, user_id, reaction) VALUES (?, ?, ?)",
+			commentID, userID, reaction,
+		)
+		return err
+	} else if err != nil {
+		return err
+	}
+
+	// Existing reaction found
+	if existingReaction == reaction {
+		// Same reaction, remove it (toggle off)
+		_, err = r.db.Exec(
+			"DELETE FROM comment_reactions WHERE comment_id = ? AND user_id = ?",
+			commentID, userID,
+		)
+		return err
+	} else {
+		// Different reaction, update it
+		_, err = r.db.Exec(
+			"UPDATE comment_reactions SET reaction = ? WHERE comment_id = ? AND user_id = ?",
+			reaction, commentID, userID,
+		)
+		return err
+	}
+}
+
+func (r *Repository) GetCommentReactionCounts(commentID int) (likes int, dislikes int, err error) {
+	err = r.db.QueryRow(
+		"SELECT COUNT(*) FROM comment_reactions WHERE comment_id = ? AND reaction = 'like'",
+		commentID,
+	).Scan(&likes)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	err = r.db.QueryRow(
+		"SELECT COUNT(*) FROM comment_reactions WHERE comment_id = ? AND reaction = 'dislike'",
+		commentID,
+	).Scan(&dislikes)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return likes, dislikes, nil
+}
+
+func (r *Repository) GetUserCommentReaction(commentID, userID int) (*string, error) {
+	var reaction string
+	err := r.db.QueryRow(
+		"SELECT reaction FROM comment_reactions WHERE comment_id = ? AND user_id = ?",
+		commentID, userID,
+	).Scan(&reaction)
+	
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &reaction, nil
 }
