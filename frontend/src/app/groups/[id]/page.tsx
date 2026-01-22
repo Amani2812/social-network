@@ -39,6 +39,8 @@ interface Event {
   event_time: string
   created_at: string
   user_response?: string
+  going_count: number
+  not_going_count: number
 }
 
 export default function GroupDetail() {
@@ -613,9 +615,20 @@ export default function GroupDetail() {
                       {event.description && (
                         <p className="text-gray-600 mb-2">{event.description}</p>
                       )}
-                      <p className="text-sm text-gray-500 mb-3">
+                      <p className="text-sm text-gray-500 mb-2">
                         📅 {new Date(event.event_time).toLocaleString()}
                       </p>
+                      
+                      {/* Attendance Counts */}
+                      <div className="flex items-center gap-4 mb-3 text-sm">
+                        <span className="text-green-600 font-medium">
+                          ✓ {event.going_count} Going
+                        </span>
+                        <span className="text-red-600 font-medium">
+                          ✗ {event.not_going_count} Not Going
+                        </span>
+                      </div>
+                      
                       <div className="flex space-x-2">
                         <button
                           onClick={() => handleEventResponse(event.id, 'going')}

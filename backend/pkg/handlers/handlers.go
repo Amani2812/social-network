@@ -1093,6 +1093,55 @@ func (h *Handler) RespondToJoinRequest(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"message": "Response recorded"})
 }
 
+func (h *Handler) GetGroupMembers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	user, err := h.getUserFromSession(r)
+	if err != nil {
+		respondError(w, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	groupIDStr := r.URL.Query().Get("group_id")
+	groupID, err := strconv.Atoi(groupIDStr)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid group ID")
+		return
+	}
+
+	// Check if user is a member of the group
+	members, err := h.repo.GetGroupMembers(groupID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get group members")
+		return
+	}
+
+	isMember := false
+	for _, member := range members {
+		if member.UserID == user.ID {
+			isMember = true
+			break
+		}
+	}
+
+	if !isMember {
+		respondError(w, http.StatusForbidden, "Only group members can view member list")
+		return
+	}
+
+	// Get members with user details
+	rows, err := h.repo.GetGroupMembersWithDetails(groupID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to get group members")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, rows)
+}
+
 func (h *Handler) CreateGroupPost(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		respondError(w, http.StatusMethodNotAllowed, "Method not allowed")

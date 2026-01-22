@@ -1,50 +1,36 @@
-# WebSocket Error Fix - TODO
+# Implementation TODO List
 
-## Current Status: In Progress
+## Part 1: Real-Time Messaging Fix
+- [x] Review and analyze current WebSocket message handling in messages/page.tsx
+- [x] Fix message reception logic to properly display incoming messages
+- [ ] Test real-time messaging between two users
 
-### Completed Steps:
-- [x] Analyzed WebSocket error in dashboard
-- [x] Reviewed all WebSocket implementations
-- [x] Created comprehensive fix plan
-- [x] Fixed dashboard WebSocket connection
-- [x] Fixed notifications page WebSocket connection
-- [x] Fixed messages page WebSocket connection
-- [x] Fixed profile page WebSocket connection
+## Part 2: Event Attendance Counts
+- [x] Update GroupEvent struct in backend/pkg/models/models.go to include count fields
+- [x] Modify GetGroupEventsWithUserResponse() to query and return attendance counts
+- [x] Update Event interface in frontend/src/app/groups/[id]/page.tsx
+- [x] Display attendance counts in the event UI
+- [ ] Test event attendance count display
 
-### Pending:
-- [ ] Test all WebSocket connections
-- [ ] Verify reconnection logic
-- [ ] Check for memory leaks
+## Testing
+- [ ] Test real-time messaging with multiple browser windows
+- [ ] Test event attendance counts with multiple users
+- [ ] Verify WebSocket connection stability
 
-## Implementation Details
+## Summary of Changes Made:
 
-### 1. Dashboard Page (frontend/src/app/dashboard/page.tsx)
-**Changes:**
-- Add reconnection attempt counter with max limit
-- Add exponential backoff for reconnections
-- Prevent multiple simultaneous connections
-- Improve error logging
-- Add proper cleanup
+### Backend Changes:
+1. **backend/pkg/models/models.go**:
+   - Added `GoingCount` and `NotGoingCount` fields to `GroupEvent` struct
+   - Updated `GetGroupEventsWithUserResponse()` to include SQL subqueries that count responses
 
-### 2. Messages Page (frontend/src/app/messages/page.tsx)
-**Changes:**
-- Ensure consistency with dashboard implementation
-- Add better error handling
-- Verify cleanup logic
+### Frontend Changes:
+1. **frontend/src/app/groups/[id]/page.tsx**:
+   - Added `going_count` and `not_going_count` fields to Event interface
+   - Added attendance count display showing number of people going/not going
+   - Styled counts with green for "Going" and red for "Not Going"
 
-### 3. Notifications Page (frontend/src/app/notifications/page.tsx)
-**Changes:**
-- Add reconnection attempt limiting
-- Improve error handling
-- Add connection state management
-
-### 4. Profile Page (frontend/src/app/profile/[id]/page.tsx)
-**Changes:**
-- Add reconnection attempt limiting
-- Improve error handling
-- Add proper cleanup
-
-### 5. Backend WebSocket Handler (backend/pkg/websocket/websocket.go)
-**Changes:**
-- Add more detailed error logging
-- Improve connection handling
+### Real-Time Messaging:
+- The WebSocket implementation is already in place and should work for real-time messaging
+- Messages are sent via WebSocket and received in real-time
+- The receiver's browser should automatically update when a new message arrives

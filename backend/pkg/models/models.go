@@ -96,14 +96,16 @@ type GroupPost struct {
 
 // GroupEvent represents an event in a group
 type GroupEvent struct {
-	ID           int       `json:"id"`
-	GroupID      int       `json:"group_id"`
-	CreatorID    int       `json:"creator_id"`
-	Title        string    `json:"title"`
-	Description  *string   `json:"description,omitempty"`
-	EventTime    time.Time `json:"event_time"`
-	CreatedAt    time.Time `json:"created_at"`
-	UserResponse *string   `json:"user_response,omitempty"`
+	ID             int       `json:"id"`
+	GroupID        int       `json:"group_id"`
+	CreatorID      int       `json:"creator_id"`
+	Title          string    `json:"title"`
+	Description    *string   `json:"description,omitempty"`
+	EventTime      time.Time `json:"event_time"`
+	CreatedAt      time.Time `json:"created_at"`
+	UserResponse   *string   `json:"user_response,omitempty"`
+	GoingCount     int       `json:"going_count"`
+	NotGoingCount  int       `json:"not_going_count"`
 }
 
 // EventResponse represents a user's response to an event
@@ -838,7 +840,9 @@ func (r *Repository) GetGroupEvents(groupID int) ([]*GroupEvent, error) {
 func (r *Repository) GetGroupEventsWithUserResponse(groupID, userID int) ([]*GroupEvent, error) {
 	rows, err := r.db.Query(
 		`SELECT ge.id, ge.group_id, ge.creator_id, ge.title, ge.description, ge.event_time, ge.created_at,
-		er.response
+		er.response,
+		COALESCE((SELECT COUNT(*) FROM event_responses WHERE event_id = ge.id AND response = 'going'), 0) as going_count,
+		COALESCE((SELECT COUNT(*) FROM event_responses WHERE event_id = ge.id AND response = 'not_going'), 0) as not_going_count
 		FROM group_events ge
 		LEFT JOIN event_responses er ON ge.id = er.event_id AND er.user_id = ?
 		WHERE ge.group_id = ?
@@ -857,6 +861,8 @@ func (r *Repository) GetGroupEventsWithUserResponse(groupID, userID int) ([]*Gro
 		if err := rows.Scan(
 			&event.ID, &event.GroupID, &event.CreatorID, &event.Title, &event.Description, &event.EventTime, &event.CreatedAt,
 			&userResponse,
+			&event.GoingCount,
+			&event.NotGoingCount,
 		); err != nil {
 			return nil, err
 		}
@@ -987,6 +993,36 @@ func (r *Repository) GetGroupMembers(groupID int) ([]*GroupMember, error) {
 		if err := rows.Scan(&member.ID, &member.GroupID, &member.UserID, &member.Status, &member.Role, &member.CreatedAt); err != nil {
 			return nil, err
 		}
+		members = append(members, member)
+	}
+	return members, nil
+}
+
+func (r *Repository) GetGroupMembersWithDetails(groupID int) ([]*GroupMember, error) {
+	rows, err := r.db.Query(
+		`SELECT gm.id, gm.group_id, gm.user_id, gm.status, gm.role, gm.created_at,
+		u.id, u.email, u.first_name, u.last_name, u.avatar_path, u.nickname
+		FROM group_members gm
+		JOIN users u ON gm.user_id = u.id
+		WHERE gm.group_id = ? AND gm.status = 'accepted'`,
+		groupID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var members []*GroupMember
+	for rows.Next() {
+		member := &GroupMember{}
+		user := &User{}
+		if err := rows.Scan(
+			&member.ID, &member.GroupID, &member.UserID, &member.Status, &member.Role, &member.CreatedAt,
+			&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.AvatarPath, &user.Nickname,
+		); err != nil {
+			return nil, err
+		}
+		member.User = user
 		members = append(members, member)
 	}
 	return members, nil
